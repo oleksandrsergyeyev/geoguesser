@@ -1,4 +1,3 @@
-
 :root { --radius: 14px; --bg: #0e0f12; --card: #16181d; --muted: #9aa0a6; --text: #e8eaed; --accent: #6ea8fe; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
@@ -65,3 +64,18 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 .sidebar .list li a:hover, .sidebar .list li a.active { background: #1a1d24; }
 
 .board-name { color: var(--muted); font-weight: 600; }
+
+
+/* --- v6.1 layout fixes --- */
+html, body { overflow-x: hidden; }
+.container { overflow-x: hidden; }
+
+/* Make main 3-card grid wrap nicely and avoid overflow */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+/* Prevent grid overflow from fixed sidebar width */
+.layout { display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 16px; }
+
+/* Tiny form style for sidebar create */
+.form.tiny { padding: 8px; }
+.form.tiny input { padding: 8px 10px; }

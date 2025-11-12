@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Submit score to <span class="board-name">{{ board.name }}</span></h1>
+  <p class="muted">Submitting as <strong>{{ me.name }}</strong></p>
+
+  {% if limit_reached or request.query_params.get('limit') %}
+  <div class="flash warn">You've already submitted today. Try again tomorrow. ✋</div>
+  {% else %}
+  <form class="form" method="post" action="/board/{{ board.slug }}/submit">
+    <label>Score - Round 1
+      <input type="number" name="round1" min="0" max="5000" required />
+    </label>
+    <label>Score - Round 2
+      <input type="number" name="round2" min="0" max="5000" required />
+    </label>
+    <label>Score - Round 3
+      <input type="number" name="round3" min="0" max="5000" required />
+    </label>
+
+    <p class="hint">Total and date are added automatically.</p>
+
+    <div class="actions">
+      <button class="btn" type="submit">Save</button>
+      <a class="btn ghost" href="/board/{{ board.slug }}">Cancel</a>
+    </div>
+  </form>
+  {% endif %}
+{% endblock %}
