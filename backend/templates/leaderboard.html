@@ -1,3 +1,4 @@
+
 {% extends "base.html" %}
 {% block content %}
   {% if saved %}
@@ -13,7 +14,7 @@
           <li><a href="/board/{{ b.slug }}" class="{% if not is_global and board and b.slug == board.slug %}active{% endif %}">{{ b.name }}</a></li>
         {% endfor %}
       </ul>
-            {% if not is_global and board %}
+      {% if not is_global and board %}
       <div class="actions" style="margin-top:10px">
         <a class="btn small" href="/board/{{ board.slug }}/submit">Submit to {{ board.name }}</a>
       </div>

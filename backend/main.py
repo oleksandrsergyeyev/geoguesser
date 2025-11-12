@@ -1,5 +1,7 @@
+
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Literal, List
@@ -13,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from sqlalchemy import (
     create_engine, Integer, String, DateTime, ForeignKey,
-    select, func, text
+    select, func
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship,
@@ -23,12 +25,23 @@ from sqlalchemy.exc import IntegrityError
 
 # ---------- Paths & DB ---------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-DB_URL = f"sqlite:///{ROOT.parent / 'geoguessr.db'}"
-engine = create_engine(DB_URL, echo=False, future=True)
+
+DB_URL = os.getenv("DATABASE_URL")
+if DB_URL:
+    # Normalize scheme for psycopg v3
+    if DB_URL.startswith("postgres://"):
+        DB_URL = DB_URL.replace("postgres://", "postgresql+psycopg://", 1)
+else:
+    DB_URL = f"sqlite:///{ROOT.parent / 'geoguessr.db'}"
+
+# SQLite needs special connect args; Postgres does not
+connect_args = {"check_same_thread": False} if DB_URL.startswith("sqlite:///") else {}
+engine = create_engine(DB_URL, echo=False, future=True, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # ---------- ORM Models ---------------------------------------------------------
-class Base(DeclarativeBase): pass
+class Base(DeclarativeBase):
+    pass
 
 class Player(Base):
     __tablename__ = "players"
@@ -61,35 +74,18 @@ class ScoreEntry(Base):
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
-# Lightweight migration / defaults
-with engine.connect() as conn:
-    # players.email column
-    cols_players = [row[1] for row in conn.execute(text("PRAGMA table_info(players)"))]
-    if "email" not in cols_players:
-        conn.execute(text("ALTER TABLE players ADD COLUMN email VARCHAR(255)"))
-        conn.commit()
-    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_players_email ON players(email)"))
-    conn.commit()
+# Ensure a Global board exists (stats-only)
+def ensure_global_board() -> None:
+    with SessionLocal() as db:
+        exists = db.execute(select(Board).where(Board.slug == "global")).scalar_one_or_none()
+        if not exists:
+            db.add(Board(name="Global", slug="global", created_at=datetime.now(timezone.utc)))
+            db.commit()
 
-    # ensure default board
-    row = conn.execute(text("SELECT id FROM boards WHERE slug='global'")).fetchone()
-    if not row:
-        conn.execute(text("INSERT INTO boards (name, slug, created_at) VALUES ('Global', 'global', :ts)"),
-                     {"ts": datetime.now(timezone.utc)})
-        conn.commit()
-        row = conn.execute(text("SELECT id FROM boards WHERE slug='global'")).fetchone()
-    global_board_id = row[0]
-
-    # score_entries.board_id
-    cols_entries = [r[1] for r in conn.execute(text("PRAGMA table_info(score_entries)"))]
-    if "board_id" not in cols_entries:
-        conn.execute(text("ALTER TABLE score_entries ADD COLUMN board_id INTEGER"))
-        conn.commit()
-    conn.execute(text("UPDATE score_entries SET board_id = COALESCE(board_id, :bid)"), {"bid": global_board_id})
-    conn.commit()
+ensure_global_board()
 
 # ---------- App & Templates ----------------------------------------------------
-app = FastAPI(title="GeoGuessr Leaderboard", version="0.6.0")
+app = FastAPI(title="GeoGuessr Leaderboard", version="0.6.3")
 app.add_middleware(SessionMiddleware, secret_key="change-me-please-very-secret")
 
 static_dir = ROOT / "static"
@@ -327,7 +323,7 @@ async def register_post(request: Request, db: Session = Depends(get_db), email: 
             db.add(player)
             db.commit()
     else:
-        # Reuse by name if legacy UNIQUE(name) exists
+        # Reuse by name if legacy UNIQUE(name) existed in older DBs
         by_name = db.execute(select(Player).where(func.lower(Player.name) == name.lower())).scalar_one_or_none()
         if by_name:
             by_name.email = email

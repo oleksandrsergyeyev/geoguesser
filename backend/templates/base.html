@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -11,7 +12,7 @@
     <nav class="nav">
       <a href="/board/global" class="brand">🌍 GeoGuessr Leaderboard</a>
       <a href="/boards" class="btn ghost small">Boards</a>
-      {% if request.session.get("user_email") %}
+      {% if request.session.get('user_email') %}
       <a href="/boards" class="btn ghost small">Create board</a>
       {% endif %}
       <div class="spacer"></div>
