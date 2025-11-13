@@ -65,3 +65,31 @@ html, body, .container { overflow-x: hidden; }
 .sidebar .list li a:hover, .sidebar .list li a.active { background: #1a1d24; }
 
 .board-name { color: var(--muted); font-weight: 600; }
+
+/* Compact table styling for 'Today' */
+.table.compact th,
+.table.compact td { padding: 6px 8px; }
+
+.table.compact th,
+.table.compact td { white-space: nowrap; }
+
+.table.compact td { font-variant-numeric: tabular-nums; }
+
+.table.compact th abbr {
+  text-decoration: none;     /* remove dotted underline */
+  border-bottom: 0;
+}
+
+/* 2-column layout on leaderboard + full-width Today */
+.cards.cards-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.cards.cards-2 .card.wide { grid-column: 1 / -1; }
+
+@media (max-width: 900px) {
+  .cards.cards-2 { grid-template-columns: 1fr; }
+  .cards.cards-2 .card.wide { grid-column: auto; }
+}
+
+/* keep Today compact & single-line headers (from earlier step) */
+.table.compact th, .table.compact td { padding: 6px 8px; white-space: nowrap; }
+.table.compact td { font-variant-numeric: tabular-nums; }
+.table.compact th abbr { text-decoration: none; border-bottom: 0; }

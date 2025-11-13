@@ -23,6 +23,7 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.exc import IntegrityError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+from fastapi.responses import FileResponse
 
 # ---------- Paths & DB ---------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
@@ -160,11 +161,15 @@ def query_leaderboard(db: Session, board_id: Optional[int], period: Literal["all
             func.count(ScoreEntry.id).label("entries"),
             func.coalesce(func.sum(ScoreEntry.total_score), 0).label("total_score"),
             func.avg(ScoreEntry.total_score).label("avg_score"),
+            # best single-round (any day in the period)
             func.max(ScoreEntry.round1).label("max_r1"),
             func.max(ScoreEntry.round2).label("max_r2"),
             func.max(ScoreEntry.round3).label("max_r3"),
-        )
-        .join(ScoreEntry, ScoreEntry.player_id == Player.id)
+            # sums for today's per-round display (safe because limit=1/day)
+            func.coalesce(func.sum(ScoreEntry.round1), 0).label("sum_r1"),
+            func.coalesce(func.sum(ScoreEntry.round2), 0).label("sum_r2"),
+            func.coalesce(func.sum(ScoreEntry.round3), 0).label("sum_r3"),
+        ).join(ScoreEntry, ScoreEntry.player_id == Player.id)
     )
     if board_id is not None:
         stmt = stmt.where(ScoreEntry.board_id == board_id)
@@ -177,21 +182,36 @@ def query_leaderboard(db: Session, board_id: Optional[int], period: Literal["all
     out: list[dict] = []
     for idx, r in enumerate(rows, start=1):
         best_round = max(int(r.max_r1 or 0), int(r.max_r2 or 0), int(r.max_r3 or 0))
-        avg_score = float(r.avg_score or 0.0)  # average *entry total*
-        avg_round = avg_score / 3.0            # per-round average
+        avg_score = float(r.avg_score or 0.0)        # average per entry
+        avg_round = avg_score / 3.0                  # per-round average (used for Today)
+        # Per-round values for Today (for other periods this won't be rendered)
+        r1 = int(r.sum_r1 or 0)
+        r2 = int(r.sum_r2 or 0)
+        r3 = int(r.sum_r3 or 0)
+
         out.append({
             "rank": idx,
             "player_name": r.player_name,
             "count": int(r.entries or 0),
             "total_score": int(r.total_score or 0),
-            "average_score": avg_score,   # used by All time / This week
-            "average_round": avg_round,   # used by Today
+            "average_score": avg_score,
+            "average_round": avg_round,
             "max_round": best_round,
+            "round1": r1,
+            "round2": r2,
+            "round3": r3,
         })
     return out
 
-
 # ---------- Routes -------------------------------------------------------------
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    ico = static_dir / "favicon.ico"
+    svg = static_dir / "favicon.svg"
+    if ico.exists():
+        return FileResponse(ico, media_type="image/x-icon")
+    return FileResponse(svg, media_type="image/svg+xml")
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     return RedirectResponse(url="/board/global", status_code=307)

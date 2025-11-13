@@ -24,7 +24,7 @@
     <section class="content">
       <h1>Leaders &middot; <span class="board-name">{% if is_global %}Global{% else %}{{ board.name }}{% endif %}</span></h1>
 
-      <div class="cards">
+      <div class="cards cards-2">
         <!-- All time -->
         <section class="card">
           <h2>All time</h2>
@@ -92,26 +92,32 @@
         </section>
 
         <!-- Today (no Entries column) -->
-        <section class="card">
+        <section class="card wide">
           <h2>Today</h2>
-          <table class="table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Player</th>
-                <th class="num">Total</th>
-                <th class="num">Av. round</th>
-                <th class="num">Max round</th>
-              </tr>
-            </thead>
+            <table class="table compact today">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Player</th>
+                  <th class="num">Round 1</th>
+                  <th class="num">Round 2</th>
+                  <th class="num">Round 3</th>
+                  <th class="num">Total</th>
+                  <th class="num"><abbr title="Average per round">Avg</abbr></th>
+                  <th class="num"><abbr title="Max single round">Max</abbr></th>
+                </tr>
+              </thead>
             <tbody>
               {% if rows_today|length == 0 %}
-                <tr><td colspan="5" class="muted">No scores yet.</td></tr>
+                <tr><td colspan="8" class="muted">No scores yet.</td></tr>
               {% else %}
                 {% for r in rows_today %}
                 <tr>
                   <td>{{ r.rank }}</td>
                   <td>{{ r.player_name }}</td>
+                  <td class="num">{{ r.round1 }}</td>
+                  <td class="num">{{ r.round2 }}</td>
+                  <td class="num">{{ r.round3 }}</td>
                   <td class="num">{{ '{:,}'.format(r.total_score) }}</td>
                   <td class="num">{{ '{:,}'.format(r.average_round | round(0, 'floor') | int) }}</td>
                   <td class="num">{{ r.max_round }}</td>
