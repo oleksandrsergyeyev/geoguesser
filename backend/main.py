@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import os
@@ -148,58 +147,77 @@ def ensure_unique_slug(db: Session, base_slug: str) -> str:
     return slug
 
 def query_leaderboard(db: Session, board_id: Optional[int], period: Literal["all", "today", "week"]) -> list[dict]:
-    since: Optional[datetime] = None
     now = utcnow()
+    since: Optional[datetime] = None
     if period == "today":
         since = start_of_today_utc(now)
     elif period == "week":
         since = start_of_week_utc(now)
 
-    stmt = (
+    # Dialect-neutral "day" key
+    dialect = db.get_bind().dialect.name
+    if "sqlite" in dialect:
+        day_expr = func.strftime("%Y-%m-%d", ScoreEntry.played_at)
+    else:
+        day_expr = func.date_trunc("day", ScoreEntry.played_at)
+
+    # 1) Collapse duplicates: one row per player per day (across boards)
+    day_rows = (
         select(
+            Player.id.label("pid"),
             Player.name.label("player_name"),
-            func.count(ScoreEntry.id).label("entries"),
-            func.coalesce(func.sum(ScoreEntry.total_score), 0).label("total_score"),
-            func.avg(ScoreEntry.total_score).label("avg_score"),
-            # best single-round (any day in the period)
-            func.max(ScoreEntry.round1).label("max_r1"),
-            func.max(ScoreEntry.round2).label("max_r2"),
-            func.max(ScoreEntry.round3).label("max_r3"),
-            # sums for today's per-round display (safe because limit=1/day)
-            func.coalesce(func.sum(ScoreEntry.round1), 0).label("sum_r1"),
-            func.coalesce(func.sum(ScoreEntry.round2), 0).label("sum_r2"),
-            func.coalesce(func.sum(ScoreEntry.round3), 0).label("sum_r3"),
-        ).join(ScoreEntry, ScoreEntry.player_id == Player.id)
+            day_expr.label("day_key"),
+            func.max(ScoreEntry.total_score).label("day_total"),
+            func.max(ScoreEntry.round1).label("r1"),
+            func.max(ScoreEntry.round2).label("r2"),
+            func.max(ScoreEntry.round3).label("r3"),
+        )
+        .join(ScoreEntry, ScoreEntry.player_id == Player.id)
     )
     if board_id is not None:
-        stmt = stmt.where(ScoreEntry.board_id == board_id)
+        day_rows = day_rows.where(ScoreEntry.board_id == board_id)
     if since is not None:
-        stmt = stmt.where(ScoreEntry.played_at >= since)
+        day_rows = day_rows.where(ScoreEntry.played_at >= since)
 
-    stmt = stmt.group_by(Player.id).order_by(func.sum(ScoreEntry.total_score).desc())
+    day_rows = day_rows.group_by("pid", "player_name", "day_key").subquery("per_day")
 
-    rows = db.execute(stmt).all()
+    # 2) Aggregate per player over the selected period
+    agg = (
+        select(
+            day_rows.c.pid,
+            day_rows.c.player_name,
+            func.count().label("entries"),                                # distinct days
+            func.coalesce(func.sum(day_rows.c.day_total), 0).label("total_score"),
+            func.avg(day_rows.c.day_total).label("avg_score"),            # average per day
+            func.max(day_rows.c.r1).label("max_r1"),
+            func.max(day_rows.c.r2).label("max_r2"),
+            func.max(day_rows.c.r3).label("max_r3"),
+            func.coalesce(func.sum(day_rows.c.r1), 0).label("sum_r1"),    # used for "today" R1/2/3
+            func.coalesce(func.sum(day_rows.c.r2), 0).label("sum_r2"),
+            func.coalesce(func.sum(day_rows.c.r3), 0).label("sum_r3"),
+        )
+        .group_by(day_rows.c.pid, day_rows.c.player_name)
+        .order_by(func.sum(day_rows.c.day_total).desc())
+    )
+
+    rows = db.execute(agg).all()
+
     out: list[dict] = []
     for idx, r in enumerate(rows, start=1):
         best_round = max(int(r.max_r1 or 0), int(r.max_r2 or 0), int(r.max_r3 or 0))
-        avg_score = float(r.avg_score or 0.0)        # average per entry
-        avg_round = avg_score / 3.0                  # per-round average (used for Today)
-        # Per-round values for Today (for other periods this won't be rendered)
-        r1 = int(r.sum_r1 or 0)
-        r2 = int(r.sum_r2 or 0)
-        r3 = int(r.sum_r3 or 0)
-
+        avg_score = float(r.avg_score or 0.0)
+        avg_round = avg_score / 3.0  # for Today table
         out.append({
             "rank": idx,
             "player_name": r.player_name,
-            "count": int(r.entries or 0),
-            "total_score": int(r.total_score or 0),
-            "average_score": avg_score,
+            "count": int(r.entries or 0),             # <-- now counts unique days
+            "total_score": int(r.total_score or 0),   # sum of per-day totals
+            "average_score": avg_score,               # average per day
             "average_round": avg_round,
             "max_round": best_round,
-            "round1": r1,
-            "round2": r2,
-            "round3": r3,
+            "round1": int(r.sum_r1 or 0),
+            "round2": int(r.sum_r2 or 0),
+            "round3": int(r.sum_r3 or 0),
         })
     return out
 
@@ -266,7 +284,6 @@ async def submit_form_for_board(slug: str, request: Request, db: Session = Depen
     if not me:
         return templates.TemplateResponse("login_required.html", {"request": request})
     if slug == "global":
-        # No submitting to global
         return RedirectResponse(url="/board/global", status_code=303)
 
     board = get_board_by_slug(db, slug)
@@ -274,10 +291,50 @@ async def submit_form_for_board(slug: str, request: Request, db: Session = Depen
         raise HTTPException(404, "Board not found")
 
     today = start_of_today_utc(utcnow())
-    existing = db.execute(select(ScoreEntry.id).where(ScoreEntry.player_id == me.id, ScoreEntry.played_at >= today)).first()
-    limit_reached = existing is not None
+
+    # already on this board today?
+    exists_here = db.execute(
+        select(ScoreEntry.id).where(
+            ScoreEntry.player_id == me.id,
+            ScoreEntry.board_id == board.id,
+            ScoreEntry.played_at >= today
+        )
+    ).first()
+    if exists_here:
+        # normal limit message
+        return templates.TemplateResponse("submit_board.html", {
+            "request": request, "me": me, "limit_reached": True, "board": board
+        })
+
+    # submitted somewhere else today? -> reuse automatically
+    any_today = db.execute(
+        select(ScoreEntry)
+        .where(
+            ScoreEntry.player_id == me.id,
+            ScoreEntry.played_at >= today
+        )
+        .order_by(ScoreEntry.played_at.desc())
+        .limit(1)
+    ).scalars().first()
+
+    if any_today:
+        copy = ScoreEntry(
+            player_id=me.id,
+            played_at=any_today.played_at,  # keep exact timestamp
+            round1=any_today.round1,
+            round2=any_today.round2,
+            round3=any_today.round3,
+            total_score=any_today.total_score,
+            board_id=board.id,
+        )
+        db.add(copy)
+        db.commit()
+        request.session["current_board_slug"] = slug
+        return RedirectResponse(url=f"/board/{slug}?saved=1&reused=1", status_code=303)
+
+    # no entry yet today -> show form for first entry
     return templates.TemplateResponse("submit_board.html", {
-        "request": request, "me": me, "limit_reached": limit_reached, "board": board
+        "request": request, "me": me, "limit_reached": False, "board": board
     })
 
 @app.post("/board/{slug}/submit")
@@ -292,7 +349,6 @@ async def submit_post_for_board(
     me = current_user(request, db)
     if not me:
         return RedirectResponse(url=f"/login?next=%2Fboard%2F{slug}%2Fsubmit", status_code=303)
-
     if slug == "global":
         return RedirectResponse(url="/board/global", status_code=303)
 
@@ -300,13 +356,46 @@ async def submit_post_for_board(
     if not board:
         raise HTTPException(404, "Board not found")
 
-    # Global daily limit
     today = start_of_today_utc(utcnow())
-    already = db.execute(select(ScoreEntry.id).where(ScoreEntry.player_id == me.id, ScoreEntry.played_at >= today)).first()
-    if already:
+
+    # block duplicates on this board
+    exists_here = db.execute(
+        select(ScoreEntry.id).where(
+            ScoreEntry.player_id == me.id,
+            ScoreEntry.board_id == board.id,
+            ScoreEntry.played_at >= today
+        )
+    ).first()
+    if exists_here:
         return RedirectResponse(url=f"/board/{slug}/submit?limit=1", status_code=303)
 
-    # Validate rounds
+    # if already submitted somewhere else today, reuse that instead of new values
+    any_today = db.execute(
+        select(ScoreEntry)
+        .where(
+            ScoreEntry.player_id == me.id,
+            ScoreEntry.played_at >= today
+        )
+        .order_by(ScoreEntry.played_at.desc())
+        .limit(1)
+    ).scalars().first()
+
+    if any_today:
+        copy = ScoreEntry(
+            player_id=me.id,
+            played_at=any_today.played_at,
+            round1=any_today.round1,
+            round2=any_today.round2,
+            round3=any_today.round3,
+            total_score=any_today.total_score,
+            board_id=board.id,
+        )
+        db.add(copy)
+        db.commit()
+        request.session["current_board_slug"] = slug
+        return RedirectResponse(url=f"/board/{slug}?saved=1&reused=1", status_code=303)
+
+    # first submission of the day -> accept the form values
     try:
         r1 = int(round1); r2 = int(round2); r3 = int(round3)
     except Exception:
@@ -326,6 +415,7 @@ async def submit_post_for_board(
     db.commit()
     request.session["current_board_slug"] = slug
     return RedirectResponse(url=f"/board/{slug}?saved=1", status_code=303)
+
 
 # ---------- Auth ---------------------------------------------------------------
 @app.get("/register", response_class=HTMLResponse)
