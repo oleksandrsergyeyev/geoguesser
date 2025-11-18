@@ -91,13 +91,14 @@
           </table>
         </section>
         <!-- Today (full-width) -->
-        <section class="card wide" id="today-card">
+        <section class="card wide" id="today-card" data-me-id="{{ me.id if me else '' }}">
           <h2 style="display:flex;align-items:center;gap:8px;">
             Today
             <span class="share-actions">
               <button class="btn small" id="copy-today">Share stats</button>
             </span>
           </h2>
+
           <table class="table compact today">
             <thead>
               <tr>
@@ -116,7 +117,7 @@
                 <tr><td colspan="8" class="muted">No scores yet.</td></tr>
               {% else %}
                 {% for r in rows_today %}
-                <tr>
+                <tr data-player-id="{{ r.player_id }}">
                   <td>{{ r.rank }}</td>
                   <td><a href="/player/{{ r.player_id }}">{{ r.player_name }}</a></td>
                   <td class="num">{{ r.round1 }}</td>
@@ -143,11 +144,30 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!card || !btn) return;  // safety
 
   async function renderCard(){
+    // Hide action buttons
     const actions = card.querySelector('.share-actions');
     const prev = actions ? actions.style.display : '';
     if (actions) actions.style.display = 'none';
+
+    // 🔹 Highlight current user row (if present)
+    const meId = card.dataset.meId;
+    let hi = null, dim = [];
+    if (meId) {
+      hi = card.querySelector(`tbody tr[data-player-id="${meId}"]`);
+      if (hi) {
+        hi.classList.add('copy-highlight');
+        dim = Array.from(card.querySelectorAll('tbody tr')).filter(tr => tr !== hi);
+        dim.forEach(tr => tr.classList.add('copy-dim'));
+      }
+    }
+
     const canvas = await html2canvas(card, { scale: 2, backgroundColor: null, useCORS: true });
+
+    // Cleanup
+    if (hi) hi.classList.remove('copy-highlight');
+    if (dim.length) dim.forEach(tr => tr.classList.remove('copy-dim'));
     if (actions) actions.style.display = prev || '';
+
     return canvas;
   }
 
