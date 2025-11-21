@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from sqlalchemy import (
     create_engine, Integer, String, DateTime, ForeignKey,
-    select, func
+    select, func, Float
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship,
@@ -50,45 +50,123 @@ engine = create_engine(DB_URL, echo=False, future=True, pool_pre_ping=True, conn
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # ---------- ORM Models ---------------------------------------------------------
+# ---------- ORM Models ---------------------------------------------------------
 class Base(DeclarativeBase):
     pass
+
 
 class Player(Base):
     __tablename__ = "players"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), index=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
-    entries: Mapped[List['ScoreEntry']] = relationship(back_populates="player")
+    entries: Mapped[List["ScoreEntry"]] = relationship(back_populates="player")
+
 
 class Board(Base):
     __tablename__ = "boards"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    owner_player_id: Mapped[Optional[int]] = mapped_column(ForeignKey("players.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    owner_player_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("players.id"), nullable=True
+    )
+
 
 class ScoreEntry(Base):
     __tablename__ = "score_entries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
-    played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), index=True
+    )
+    played_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     round1: Mapped[int] = mapped_column(Integer)
     round2: Mapped[int] = mapped_column(Integer)
     round3: Mapped[int] = mapped_column(Integer)
     total_score: Mapped[int] = mapped_column(Integer)
-    board_id: Mapped[Optional[int]] = mapped_column(ForeignKey("boards.id"), index=True, nullable=True)
+    board_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("boards.id"), index=True, nullable=True
+    )
 
     # screenshots (per round)
-    screenshot_r1_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    screenshot_r2_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    screenshot_r3_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    screenshot_r1_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    screenshot_r2_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    screenshot_r3_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     # legacy single screenshot (kept for backward compat; optional)
-    screenshot_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    screenshot_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     player: Mapped[Player] = relationship(back_populates="entries")
 
+    # One GeoGame per ScoreEntry (GeoGuessr import)
+    geogame: Mapped[Optional["GeoGame"]] = relationship(
+        back_populates="score_entry",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class GeoGame(Base):
+    """
+    One imported GeoGuessr game per ScoreEntry (per player+board+day).
+    Stores overall distance etc.
+    """
+    __tablename__ = "geogames"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    score_entry_id: Mapped[int] = mapped_column(
+        ForeignKey("score_entries.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    geoguessr_game_id: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True
+    )
+    total_distance_m: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    score_entry: Mapped[ScoreEntry] = relationship(back_populates="geogame")
+    rounds: Mapped[List["GeoRound"]] = relationship(
+        back_populates="game", cascade="all, delete-orphan"
+    )
+
+
+class GeoRound(Base):
+    """
+    One row per round with guess & target coordinates and distance.
+    """
+    __tablename__ = "georounds"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("geogames.id", ondelete="CASCADE"), index=True
+    )
+    round_index: Mapped[int] = mapped_column(Integer)  # 1..3
+
+    guess_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    guess_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    distance_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    game: Mapped[GeoGame] = relationship(back_populates="rounds")
 
 
 # Create tables if they don't exist
@@ -112,6 +190,21 @@ def ensure_round_shot_columns():
 
 ensure_round_shot_columns()
 
+def ensure_distance_columns():
+    insp = inspect(engine)
+    cols = {c['name'] for c in insp.get_columns('score_entries')}
+    stmts = []
+    if 'distance_r1_m' not in cols:
+        stmts.append("ALTER TABLE score_entries ADD COLUMN distance_r1_m FLOAT")
+    if 'distance_r2_m' not in cols:
+        stmts.append("ALTER TABLE score_entries ADD COLUMN distance_r2_m FLOAT")
+    if 'distance_r3_m' not in cols:
+        stmts.append("ALTER TABLE score_entries ADD COLUMN distance_r3_m FLOAT")
+
+    if stmts:
+        with engine.begin() as conn:
+            for sql in stmts:
+                conn.exec_driver_sql(sql)
 
 def ensure_se_column():
     insp = inspect(engine)
@@ -137,8 +230,48 @@ def cleanup_old_uploads():
             if (today - d).days >= RETAIN_DAYS:
                 shutil.rmtree(p, ignore_errors=True)
 
+def ensure_geoguessr_columns():
+    """
+    Add distance/coordinate columns for GeoGuessr imports if they don't exist yet.
+    Safe on both SQLite and Postgres.
+    """
+    insp = inspect(engine)
+    existing = {c['name'] for c in insp.get_columns('score_entries')}
+    # Use a generic FLOAT type that works on both SQLite and Postgres.
+    float_type = "DOUBLE PRECISION" if engine.dialect.name.startswith("postgres") else "FLOAT"
+
+    to_add = {
+        "distance_r1_m": float_type,
+        "distance_r2_m": float_type,
+        "distance_r3_m": float_type,
+        "total_distance_m": float_type,
+        "guess_r1_lat": float_type,
+        "guess_r1_lng": float_type,
+        "target_r1_lat": float_type,
+        "target_r1_lng": float_type,
+        "guess_r2_lat": float_type,
+        "guess_r2_lng": float_type,
+        "target_r2_lat": float_type,
+        "target_r2_lng": float_type,
+        "guess_r3_lat": float_type,
+        "guess_r3_lng": float_type,
+        "target_r3_lat": float_type,
+        "target_r3_lng": float_type,
+    }
+
+    stmts = []
+    for col, typ in to_add.items():
+        if col not in existing:
+            stmts.append(f"ALTER TABLE score_entries ADD COLUMN {col} {typ}")
+
+    if stmts:
+        with engine.begin() as conn:
+            for sql in stmts:
+                conn.exec_driver_sql(sql)
+
 
 ensure_se_column()
+ensure_geoguessr_columns()
 cleanup_old_uploads()
 
 
@@ -175,6 +308,46 @@ class SubmitEntryIn(BaseModel):
     round2: int = Field(..., ge=0, le=5000)
     round3: int = Field(..., ge=0, le=5000)
     board_slug: Optional[str] = Field(default=None)  # API only; UI uses path param
+
+class GeoRoundIn(BaseModel):
+    score: int = Field(..., ge=0, le=5000)
+    distance_m: Optional[float] = Field(default=None, ge=0)
+    # flat coords – easy to send from the extension
+    guess_lat: Optional[float] = None
+    guess_lng: Optional[float] = None
+    target_lat: Optional[float] = None
+    target_lng: Optional[float] = None
+
+
+class GeoGuessrImportIn(BaseModel):
+    player_name: str = Field(..., min_length=1, max_length=80)
+    player_email: Optional[str] = Field(default=None, max_length=255)
+    board_slug: str = Field(..., min_length=1, max_length=120)
+
+    # optional game-level metadata
+    total_score: Optional[int] = Field(default=None, ge=0)
+    max_score: Optional[int] = Field(default=None, ge=0)
+    total_distance_m: Optional[float] = Field(default=None, ge=0)
+    played_at: Optional[datetime] = None  # if not provided, we use "now"
+
+    rounds: List[GeoRoundIn] = Field(..., min_items=1, max_items=10)
+
+class GeoGuessrRoundIn(BaseModel):
+    score: int = Field(..., ge=0, le=5000)
+    distance_m: Optional[float] = Field(default=None, ge=0)
+    guess_lat: Optional[float] = None
+    guess_lng: Optional[float] = None
+    target_lat: Optional[float] = None
+    target_lng: Optional[float] = None
+
+
+class GeoGuessrImportIn(BaseModel):
+    player_name: str = Field(..., min_length=1, max_length=80)
+    board_slug: str = Field(..., min_length=1, max_length=120)
+    total_score: Optional[int] = Field(default=None, ge=0)
+    total_distance_m: Optional[float] = Field(default=None, ge=0)
+    game_id: Optional[str] = None
+    rounds: List[GeoGuessrRoundIn]
 
 # ---------- Utilities ----------------------------------------------------------
 def utcnow() -> datetime:
@@ -662,6 +835,135 @@ async def api_submit_entry(payload: SubmitEntryIn, db: Session = Depends(get_db)
     db.commit()
     return {"ok": True, "entry_id": entry.id, "total": total}
 
+@app.post("/api/geoguessr/import")
+async def api_geoguessr_import(
+    payload: GeoGuessrImportIn, db: Session = Depends(get_db)
+):
+    """
+    Import a GeoGuessr daily game with per-round coordinates.
+    - Upserts ScoreEntry for today (player + board).
+    - Upserts GeoGame + GeoRound rows for map visualization.
+    """
+    # 1) Resolve player (by name, case-insensitive – same as /api/submit_entry)
+    player = db.execute(
+        select(Player).where(func.lower(Player.name) == payload.player_name.lower())
+    ).scalar_one_or_none()
+    if not player:
+        player = Player(name=payload.player_name)
+        db.add(player)
+        db.flush()
+
+    # 2) Resolve board
+    if not payload.board_slug or payload.board_slug == "global":
+        raise HTTPException(400, "Submissions must target a specific board")
+
+    board = get_board_by_slug(db, payload.board_slug)
+    if not board:
+        raise HTTPException(400, "Board not found")
+
+    # 3) Compute totals if they weren't provided
+    round_scores = [int(r.score or 0) for r in payload.rounds]
+    while len(round_scores) < 3:
+        round_scores.append(0)
+
+    total_score = (
+        int(payload.total_score)
+        if payload.total_score is not None
+        else sum(round_scores[:3])
+    )
+
+    total_distance_m = (
+        float(payload.total_distance_m)
+        if payload.total_distance_m is not None
+        else sum(float(r.distance_m or 0.0) for r in payload.rounds)
+    )
+
+    # 4) Upsert ScoreEntry for today (per player+board)
+    now = utcnow()
+    today = start_of_today_utc(now)
+    entry = (
+        db.execute(
+            select(ScoreEntry)
+            .where(
+                ScoreEntry.player_id == player.id,
+                ScoreEntry.board_id == board.id,
+                ScoreEntry.played_at >= today,
+            )
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+    if entry:
+        entry.round1 = round_scores[0]
+        entry.round2 = round_scores[1]
+        entry.round3 = round_scores[2]
+        entry.total_score = total_score
+        entry.played_at = now
+    else:
+        entry = ScoreEntry(
+            player_id=player.id,
+            played_at=now,
+            round1=round_scores[0],
+            round2=round_scores[1],
+            round3=round_scores[2],
+            total_score=total_score,
+            board_id=board.id,
+        )
+        db.add(entry)
+        db.flush()  # get entry.id
+
+    # 5) Upsert GeoGame
+    game = (
+        db.execute(
+            select(GeoGame).where(GeoGame.score_entry_id == entry.id).limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+    if not game:
+        game = GeoGame(
+            score_entry_id=entry.id,
+            geoguessr_game_id=payload.game_id,
+            total_distance_m=total_distance_m,
+        )
+        db.add(game)
+        db.flush()
+    else:
+        game.geoguessr_game_id = payload.game_id or game.geoguessr_game_id
+        game.total_distance_m = total_distance_m
+
+    # 6) Replace GeoRound rows for this game
+    #    (cheap enough for 3–5 rounds)
+    for existing in list(game.rounds):
+        db.delete(existing)
+    game.rounds.clear()
+
+    for idx, r in enumerate(payload.rounds, start=1):
+        gr = GeoRound(
+            game_id=game.id,
+            round_index=idx,
+            guess_lat=r.guess_lat,
+            guess_lng=r.guess_lng,
+            target_lat=r.target_lat,
+            target_lng=r.target_lng,
+            distance_m=r.distance_m,
+            score=int(r.score or 0),
+        )
+        db.add(gr)
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "entry_id": entry.id,
+        "total_score": total_score,
+        "total_distance_m": total_distance_m,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"ok": True, "time": utcnow().isoformat()}
@@ -728,7 +1030,9 @@ async def paste_image(request: Request):
 async def todays_round(slug: str, request: Request, db: Session = Depends(get_db)):
     me = current_user(request, db)
     if not me:
-        return RedirectResponse(url="/login?next=%2Fboard%2F" + slug + "%2Ftoday", status_code=303)
+        return RedirectResponse(
+            url="/login?next=%2Fboard%2F" + slug + "%2Ftoday", status_code=303
+        )
 
     if slug == "global":
         raise HTTPException(404, "Pick a specific board.")
@@ -744,23 +1048,23 @@ async def todays_round(slug: str, request: Request, db: Session = Depends(get_db
         select(ScoreEntry.id).where(
             ScoreEntry.player_id == me.id,
             ScoreEntry.board_id == board.id,
-            ScoreEntry.played_at >= today
+            ScoreEntry.played_at >= today,
         )
     ).first()
     if not allowed:
-        return templates.TemplateResponse("today_locked.html", {
-            "request": request, "me": me, "board": board
-        })
+        return templates.TemplateResponse(
+            "today_locked.html", {"request": request, "me": me, "board": board}
+        )
 
+    # 1) Base rows (scores)
     rows = db.execute(
         select(
+            ScoreEntry.id.label("entry_id"),
             Player.name,
-            ScoreEntry.round1, ScoreEntry.round2, ScoreEntry.round3,
+            ScoreEntry.round1,
+            ScoreEntry.round2,
+            ScoreEntry.round3,
             ScoreEntry.total_score,
-            ScoreEntry.screenshot_r1_path.label("shot1"),
-            ScoreEntry.screenshot_r2_path.label("shot2"),
-            ScoreEntry.screenshot_r3_path.label("shot3"),
-            ScoreEntry.screenshot_path.label("legacy_shot"),  # fallback
             ScoreEntry.played_at,
         )
         .join(Player, Player.id == ScoreEntry.player_id)
@@ -768,18 +1072,89 @@ async def todays_round(slug: str, request: Request, db: Session = Depends(get_db
         .order_by(ScoreEntry.total_score.desc())
     ).all()
 
-    posts = [{
-        "name": r.name,
-        "r1": int(r.round1), "r2": int(r.round2), "r3": int(r.round3),
-        "total": int(r.total_score),
-        "img1": r.shot1 or r.legacy_shot,
-        "img2": r.shot2,
-        "img3": r.shot3,
-        "time": r.played_at.strftime("%H:%M"),
-    } for r in rows]
+    entry_ids = [r.entry_id for r in rows]
+
+    # 2) Geo data per entry
+    geo_by_entry: dict[int, dict] = {}
+    if entry_ids:
+        geo_rows = db.execute(
+            select(
+                GeoGame.score_entry_id,
+                GeoGame.total_distance_m,
+                GeoRound.round_index,
+                GeoRound.score,
+                GeoRound.distance_m,
+                GeoRound.guess_lat,
+                GeoRound.guess_lng,
+                GeoRound.target_lat,
+                GeoRound.target_lng,
+            )
+            .join(GeoRound, GeoRound.game_id == GeoGame.id, isouter=True)
+            .where(GeoGame.score_entry_id.in_(entry_ids))
+        ).all()
+
+        for gr in geo_rows:
+            bucket = geo_by_entry.setdefault(
+                gr.score_entry_id,
+                {"total_distance_m": float(gr.total_distance_m or 0.0), "rounds": {}},
+            )
+            if gr.round_index is not None:
+                bucket["rounds"][gr.round_index] = {
+                    "score": int(gr.score or 0),
+                    "distance_m": float(gr.distance_m or 0.0) if gr.distance_m is not None else None,
+                    "guess_lat": gr.guess_lat,
+                    "guess_lng": gr.guess_lng,
+                    "target_lat": gr.target_lat,
+                    "target_lng": gr.target_lng,
+                }
+
+    # 3) Build posts list for template
+    posts: list[dict] = []
+    for r in rows:
+        geo = geo_by_entry.get(r.entry_id, {})
+        rounds_geo = geo.get("rounds", {})
+        total_distance_m = geo.get("total_distance_m")
+
+        def build_round(idx: int, score_value: int) -> dict:
+            rg = rounds_geo.get(idx) or {}
+            return {
+                "index": idx,
+                "score": score_value,
+                "distance_m": rg.get("distance_m"),
+                "guess_lat": rg.get("guess_lat"),
+                "guess_lng": rg.get("guess_lng"),
+                "target_lat": rg.get("target_lat"),
+                "target_lng": rg.get("target_lng"),
+                "has_map": rg.get("guess_lat") is not None and rg.get("target_lat") is not None,
+            }
+
+        posts.append(
+            {
+                "name": r.name,
+                "r1": int(r.round1 or 0),
+                "r2": int(r.round2 or 0),
+                "r3": int(r.round3 or 0),
+                "total": int(r.total_score or 0),
+                "total_distance_m": total_distance_m,
+                "total_distance_km": (total_distance_m / 1000.0)
+                if total_distance_m
+                else None,
+                "time": r.played_at.strftime("%H:%M"),
+                "rounds": [
+                    build_round(1, int(r.round1 or 0)),
+                    build_round(2, int(r.round2 or 0)),
+                    build_round(3, int(r.round3 or 0)),
+                ],
+            }
+        )
 
     return templates.TemplateResponse(
         "today_round.html",
-        {"request": request, "me": me, "board": board, "posts": posts, "is_global": False}
+        {
+            "request": request,
+            "me": me,
+            "board": board,
+            "posts": posts,
+            "is_global": False,
+        },
     )
-

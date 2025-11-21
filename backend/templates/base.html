@@ -5,7 +5,13 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GeoGuesser Leaderboard</title>
-  <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css" />
+  <!-- Add Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+
 </head>
 <body>
     <header class="topbar">
@@ -50,6 +56,14 @@
 
   <footer class="footer">Made by Oleksandr for friendly team competitions.</footer>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- Leaflet JS for maps -->
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-o9N1j7kGStkPDHLT1R+gGZh3UG65Z8zh27p5t1g8C6Q="
+  crossorigin=""
+></script>
+
 <script>
   // Toast helper (existing functionality)
   window.showToast = (msg, timeout = 1800) => {
@@ -111,6 +125,10 @@
     }
   })();
 </script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+
+</body>
+</html>
 
 </body>
 </html>
