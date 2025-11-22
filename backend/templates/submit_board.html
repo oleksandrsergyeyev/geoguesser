@@ -47,6 +47,42 @@
         If you don’t see the button, make sure the extension is installed and enabled,
         and that you are logged in on both GeoGuessr and GeoLead.
       </p>
+            <p class="muted" style="margin-top:16px;">
+        Don’t have the browser extension yet?
+        <a id="geolead-ext-install-link" href="/extensions" target="_blank" rel="noreferrer">
+          Install GeoLead ⇄ GeoGuessr extension for your browser
+        </a>.
+      </p>
+
+      <script>
+        (function () {
+          const link = document.getElementById("geolead-ext-install-link");
+          if (!link) return;
+
+          const ua = navigator.userAgent || "";
+          let url = "/extensions"; // fallback, e.g. a help page on GeoLead
+
+          // IMPORTANT: replace the placeholders below with your real store URLs
+          const chromeUrl  = "https://chromewebstore.google.com/detail/REPLACE_WITH_REAL_ID";
+          const edgeUrl    = "https://microsoftedge.microsoft.com/addons/detail/REPLACE_WITH_REAL_ID";
+          const firefoxUrl = "https://addons.mozilla.org/en-US/firefox/addon/REPLACE_WITH_REAL_ID/";
+          const safariUrl  = "https://apps.apple.com/app/idREPLACE_WITH_REAL_ID";
+
+          if (/Firefox\/\d+/i.test(ua)) {
+            url = firefoxUrl;
+          } else if (/Edg\/\d+/i.test(ua)) {
+            url = edgeUrl;
+          } else if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua)) {
+            url = safariUrl;
+          } else {
+            // default: Chrome / other Chromium browsers
+            url = chromeUrl;
+          }
+
+          link.href = url;
+        })();
+      </script>
+
     </div>
 
     <script>

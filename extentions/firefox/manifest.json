@@ -1,0 +1,33 @@
+{
+  "manifest_version": 2,
+  "name": "GeoLead ⇄ GeoGuessr Bridge",
+  "version": "0.1.0",
+  "description": "Automatically captures GeoGuessr daily game results and makes them available to GeoLead.",
+  "permissions": [
+    "storage",
+    "https://www.geoguessr.com/*",
+    "https://www.geolead.fun/*",
+    "http://localhost/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.geoguessr.com/*"],
+      "js": ["geoguessr_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.geolead.fun/*",
+        "http://localhost/*"
+      ],
+      "js": ["geolead_content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "geolead-bridge@example.com",
+      "strict_min_version": "109.0"
+    }
+  }
+}

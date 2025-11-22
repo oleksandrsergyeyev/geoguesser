@@ -1,0 +1,26 @@
+<!--?xml version="1.0" encoding="UTF-8"?-->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="240" fill="#10b981"></circle>
+
+  <!-- Map pin -->
+  <g transform="translate(0, 20)">
+    <path d="M256 110
+         C204 110 162 152 162 204
+         C162 269 226 325 250 355
+         C253 359 259 359 262 355
+         C286 325 350 269 350 204
+         C350 152 308 110 256 110Z" fill="#ffffff"></path>
+
+    <circle cx="256" cy="204" r="40" fill="#10b981"></circle>
+  </g>
+
+  <!-- Small bar chart at bottom -->
+  <g transform="translate(140, 320)">
+    <rect x="0" y="80" width="40" height="60" rx="6" fill="#ffffff" opacity="0.9"></rect>
+    <rect x="60" y="50" width="40" height="90" rx="6" fill="#ffffff" opacity="0.95"></rect>
+    <rect x="120" y="30" width="40" height="110" rx="6" fill="#ffffff"></rect>
+    <rect x="180" y="60" width="40" height="80" rx="6" fill="#ffffff" opacity="0.9"></rect>
+  </g>
+</svg>

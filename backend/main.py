@@ -1168,3 +1168,17 @@ async def todays_round(slug: str, request: Request, db: Session = Depends(get_db
             "is_global": False,
         },
     )
+
+@app.get("/privacy/extension", response_class=HTMLResponse)
+async def extension_privacy(request: Request):
+    """
+    Privacy policy for the GeoLead ⇄ GeoGuessr Bridge browser extension.
+    """
+    last_updated = datetime.now(timezone.utc).date().isoformat()
+    return templates.TemplateResponse(
+        "privacy_extension.html",
+        {
+            "request": request,
+            "last_updated": last_updated,
+        },
+    )

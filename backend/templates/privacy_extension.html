@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}GeoLead ⇄ GeoGuessr Bridge · Privacy Policy{% endblock %}
+
+{% block content %}
+  <div class="card" style="max-width: 780px; margin: 0 auto;">
+    <h1>GeoLead ⇄ GeoGuessr Bridge – Privacy Policy</h1>
+    <p class="muted">Last updated: {{ last_updated }}</p>
+
+    <p>
+      This browser extension (“Extension”) is provided by <strong>GeoLead</strong> (“we”, “us”).
+      Its only purpose is to help you transfer your own GeoGuessr daily game results into your
+      GeoLead account so that you don’t need to enter scores manually.
+    </p>
+
+    <h2>1. What the extension does</h2>
+    <p>The Extension works in three simple steps:</p>
+    <ol>
+      <li>
+        On <strong>geoguessr.com</strong>, it reads the game result data that is already available
+        in the page (for example from GeoGuessr’s own JavaScript data) after you play a game.
+      </li>
+      <li>
+        It stores a small summary of your latest game in the browser’s local extension storage.
+      </li>
+      <li>
+        On the <strong>GeoLead</strong> submit page (<code>geolead.fun</code>), when you click
+        “Import today’s game results”, it sends that summary to the GeoLead backend so that a
+        score entry can be created or updated for you.
+      </li>
+    </ol>
+    <p>
+      The Extension does not run on any websites other than <code>geoguessr.com</code> and
+      <code>geolead.fun</code>.
+    </p>
+
+    <h2>2. Data we access</h2>
+    <p>From GeoGuessr pages we may access the following data for the game you just played:</p>
+    <ul>
+      <li>
+        <strong>GeoGuessr profile information</strong> – such as your nickname, internal user
+        ID and (if provided by GeoGuessr) email address.
+      </li>
+      <li>
+        <strong>Game metadata</strong> – such as game or daily quiz ID, game mode and
+        date/time played.
+      </li>
+      <li>
+        <strong>Game results</strong> – scores per round, total score, round distances and
+        coordinates for your guess and the correct location.
+      </li>
+    </ul>
+    <p>
+      This data is read only for your own game and only for the purpose described here.
+    </p>
+
+    <h2>3. How we use the data</h2>
+    <p>The Extension uses this data only to:</p>
+    <ul>
+      <li>
+        store your latest game summary in <code>chrome.storage.local</code> in your browser so it
+        can be transferred between GeoGuessr and GeoLead; and
+      </li>
+      <li>
+        send the summary to the GeoLead backend when you click
+        “Import today’s game results”, so that GeoLead can create or update your score entry and
+        display your scores, distances and maps.
+      </li>
+    </ul>
+    <p>
+      We do <strong>not</strong> use this data for advertising, profiling, or analytics that are
+      unrelated to GeoLead.
+    </p>
+
+    <h2>4. Data sharing</h2>
+    <ul>
+      <li>
+        The Extension sends your game summary only to the GeoLead service that you use
+        (for example <code>https://www.geolead.fun/</code>).
+      </li>
+      <li>
+        We do <strong>not</strong> sell or transfer your data to third parties.
+      </li>
+      <li>
+        We do <strong>not</strong> use your data to determine creditworthiness or for lending.
+      </li>
+    </ul>
+
+    <h2>5. Data retention</h2>
+    <ul>
+      <li>
+        In the browser, the game summary is stored in the Extension’s local storage and is
+        overwritten the next time you play a game and the Extension captures new results.
+      </li>
+      <li>
+        On the GeoLead side, your imported scores are stored only as long as needed to provide your
+        leaderboard and history features. Retention is governed by GeoLead’s main site privacy
+        policy.
+      </li>
+    </ul>
+
+    <h2>6. Permissions</h2>
+    <p>The Extension uses the following permissions:</p>
+    <ul>
+      <li>
+        <strong><code>storage</code></strong> – to temporarily store the latest game summary
+        between <code>geoguessr.com</code> and <code>geolead.fun</code>.
+      </li>
+      <li>
+        <strong>Host permissions</strong>:
+        <ul>
+          <li><code>https://www.geoguessr.com/*</code> – to read your own game data from GeoGuessr daily game pages.</li>
+          <li><code>https://www.geolead.fun/*</code> – to inject the import button on the submit page and send your game result to GeoLead.</li>
+        </ul>
+      </li>
+    </ul>
+    <p>
+      The Extension does not access your browsing activity outside these domains.
+    </p>
+
+    <h2>7. Contact</h2>
+    <p>
+      If you have any questions about this Extension or this Privacy Policy, please contact:
+    </p>
+    <p>
+      <strong>GeoLead</strong><br>
+      Email: <a href="mailto:explod1983@gmail.com">explod1983@gmail.com</a><br>
+      Website: <a href="https://www.geolead.fun/" target="_blank" rel="noreferrer">https://www.geolead.fun/</a>
+    </p>
+  </div>
+{% endblock %}
+</title>
+</head>
+<body>
+
+</body>
+</html>
