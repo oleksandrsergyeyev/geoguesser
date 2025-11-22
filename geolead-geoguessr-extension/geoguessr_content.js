@@ -6,7 +6,7 @@
     console.log(EXT_LOG_PREFIX, ...args);
   }
 
-  // ---------- Helpers to read __NEXT_DATA__ ----------
+  // ---------- Read __NEXT_DATA__ ----------
 
   function getNextData() {
     const script = document.getElementById("__NEXT_DATA__");
@@ -14,11 +14,9 @@
       log("__NEXT_DATA__ script not found.");
       return null;
     }
-
     try {
       const raw = script.textContent || script.innerText || "{}";
-      const data = JSON.parse(raw);
-      return data;
+      return JSON.parse(raw);
     } catch (e) {
       console.warn(EXT_LOG_PREFIX, "Failed to parse __NEXT_DATA__", e);
       return null;
@@ -42,7 +40,6 @@
       countryCode: userRaw.countryCode || null
     };
 
-    // Support both classic games and the free daily quiz
     const classicGame =
       pageProps.game || (pageProps.data && pageProps.data.game) || null;
     const quizGame = pageProps.quizGame || null;
@@ -50,7 +47,7 @@
     if (quizGame) {
       return {
         type: "daily-quiz",
-        dailyQuizId: pageProps.dailyQuizId || null,
+        dailyQuizId: pageProps.dailyQuizId || quizGame.dailyQuizId || null,
         game: quizGame,
         user
       };
@@ -68,7 +65,7 @@
     return null;
   }
 
-  // ---------- Build summaries ----------
+  // ---------- Builders ----------
 
   function buildClassicSummary(game, user) {
     const map = game.map || game.challenge?.map || {};
@@ -92,24 +89,28 @@
       const guesses = rnd.guesses || [];
       const guess = guesses[0] || rnd.guess || null;
 
-      const distance =
-        guess?.distanceInMeters ??
-        guess?.distance ??
-        rnd.distanceInMeters ??
-        null;
+      let distance = null;
+      if (typeof guess?.distance === "number") {
+        distance = guess.distance;
+      } else if (typeof guess?.distanceInMeters === "number") {
+        distance = guess.distanceInMeters;
+      }
 
-      const score =
-        guess?.roundScoreInPoints ??
-        guess?.scoreInPoints ??
-        rnd.roundScoreInPoints ??
-        null;
+      let score = null;
+      if (typeof guess?.roundScoreInPoints === "number") {
+        score = guess.roundScoreInPoints;
+      } else if (typeof guess?.scoreInPoints === "number") {
+        score = guess.scoreInPoints;
+      } else if (typeof guess?.score === "number") {
+        score = guess.score;
+      }
 
       return {
         round: i + 1,
-        distance_m: typeof distance === "number" ? distance : null,
+        distance_m: distance,
         distance_km:
           typeof distance === "number" ? distance / 1000 : null,
-        score: typeof score === "number" ? score : null,
+        score,
         correct: { lat: rnd.lat, lng: rnd.lng },
         guess: guess
           ? { lat: guess.lat, lng: guess.lng }
@@ -117,11 +118,19 @@
       };
     });
 
+    const playedAt = new Date().toISOString();
+
+    const total_distance_m = roundsSummary.reduce(
+      (acc, r) => acc + (typeof r.distance_m === "number" ? r.distance_m : 0),
+      0
+    );
+
     return {
       source: "geoguessr",
       mode: "classic",
       token: game.token || null,
       user,
+      played_at: playedAt,
       map: {
         id: map.id || null,
         name: map.name || null,
@@ -129,57 +138,105 @@
         image: mapImage
       },
       total_score: totalScore,
+      total_distance_m,
       rounds: roundsSummary
     };
   }
 
+  // Daily free game (/free) – this is what we care about
   function buildDailyQuizSummary(quizGame, user, dailyQuizId) {
     const guesses = quizGame.guesses || [];
     const rounds = quizGame.rounds || [];
 
     const guessByRound = {};
     for (const g of guesses) {
-      if (g && g.roundNumber != null) {
-        guessByRound[g.roundNumber] = g;
-      }
+      if (!g) continue;
+      const rn = g.roundNumber ?? g.round ?? null;
+      if (rn == null) continue;
+      guessByRound[rn] = g;
     }
 
     const roundsSummary = rounds.map((r, idx) => {
-      const roundNumber = r.roundNumber ?? idx + 1;
+      const roundNumber = r.roundNumber ?? r.round ?? idx + 1;
       const guess = guessByRound[roundNumber] || null;
 
       const pano =
         r.question?.panoramaQuestionPayload?.panorama || {};
-      const correctLat = pano.lat;
-      const correctLng = pano.lng;
+      const correctLat = pano.lat ?? pano.latitude ?? null;
+      const correctLng = pano.lng ?? pano.longitude ?? null;
 
-      const distance =
-        typeof guess?.distance === "number" ? guess.distance : null;
-      const score =
-        typeof guess?.score === "number" ? guess.score : null;
+      let distance = null;
+      if (typeof guess?.distance === "number") {
+        distance = guess.distance;
+      } else if (typeof guess?.distanceInMeters === "number") {
+        distance = guess.distanceInMeters;
+      }
+
+      let score = null;
+      if (typeof guess?.score === "number") {
+        score = guess.score;
+      } else if (typeof guess?.scoreInPoints === "number") {
+        score = guess.scoreInPoints;
+      } else if (typeof guess?.roundScoreInPoints === "number") {
+        score = guess.roundScoreInPoints;
+      }
 
       return {
         round: roundNumber,
-        distance_m: typeof distance === "number" ? distance : null,
+        distance_m: distance,
         distance_km:
           typeof distance === "number" ? distance / 1000 : null,
-        score: typeof score === "number" ? score : null,
-        correct: { lat: correctLat, lng: correctLng },
-        guess: guess
-          ? { lat: guess.lat, lng: guess.lng }
-          : null
+        score,
+        correct:
+          typeof correctLat === "number" && typeof correctLng === "number"
+            ? { lat: correctLat, lng: correctLng }
+            : null,
+        guess:
+          guess &&
+          typeof guess.lat === "number" &&
+          typeof guess.lng === "number"
+            ? { lat: guess.lat, lng: guess.lng }
+            : null
       };
     });
+
+    // When we captured this (used for "today" check)
+    const playedAt = new Date().toISOString();
+
+    // Total score: use GeoGuessr field if present, otherwise sum rounds
+    let totalScore = null;
+    if (typeof quizGame.totalScore === "number") {
+      totalScore = quizGame.totalScore;
+    } else if (typeof quizGame.score === "number") {
+      totalScore = quizGame.score;
+    }
+
+    if (totalScore == null) {
+      totalScore = roundsSummary.reduce(
+        (acc, r) => acc + (typeof r.score === "number" ? r.score : 0),
+        0
+      );
+    }
+
+    const total_distance_m = roundsSummary.reduce(
+      (acc, r) => acc + (typeof r.distance_m === "number" ? r.distance_m : 0),
+      0
+    );
+
+    const totalRounds =
+      quizGame.totalRounds || rounds.length || roundsSummary.length || null;
 
     return {
       source: "geoguessr",
       mode: "daily-quiz",
-      dailyQuizId: dailyQuizId || null,
+      dailyQuizId: dailyQuizId || quizGame.dailyQuizId || null,
       quizId: quizGame.quizId || null,
       user,
-      total_score: quizGame.totalScore ?? null,
-      max_score: quizGame.maxScore ?? null,
-      total_rounds: quizGame.totalRounds ?? rounds.length ?? null,
+      played_at: playedAt,
+      total_score: totalScore,
+      max_score: typeof quizGame.maxScore === "number" ? quizGame.maxScore : null,
+      total_rounds: totalRounds,
+      total_distance_m,
       rounds: roundsSummary
     };
   }
@@ -203,9 +260,7 @@
 
   function storeSummary() {
     const summary = buildSummaryFromNextData();
-    if (!summary || !Array.isArray(summary.rounds) || !summary.rounds.length) {
-      return;
-    }
+    if (!summary) return;
 
     chrome.storage.local.set({ geoguessrLastGame: summary }, () => {
       if (chrome.runtime.lastError) {
@@ -220,7 +275,7 @@
     });
   }
 
-  // ---------- Watch for SPA updates (Next.js) ----------
+  // ---------- Observe updates ----------
 
   function setupObserver() {
     const script = document.getElementById("__NEXT_DATA__");
@@ -251,7 +306,7 @@
         (classicGame.currentRoundNumber || "");
 
       if (sig && sig === lastSignature) {
-        return; // no change
+        return;
       }
       lastSignature = sig;
 

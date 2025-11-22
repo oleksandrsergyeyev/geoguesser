@@ -6,223 +6,212 @@
     console.log(EXT_LOG_PREFIX, ...args);
   }
 
-  // ---- Helpers to get context from the GeoLead page ----
+  function showAlert(msg) {
+    window.alert(msg);
+  }
 
-  function getBoardSlug() {
-    // Works for /board/{slug}, /board/{slug}/today, /board/{slug}/submit, etc.
-    const m = window.location.pathname.match(/^\/board\/([^/]+)/);
-    if (!m) return null;
+  // Compare dates in the timezone encoded in played_at
+  function isToday(isoString) {
     try {
-      return decodeURIComponent(m[1]);
+      const played = new Date(isoString);
+      if (Number.isNaN(played.getTime())) return false;
+
+      const now = new Date();
+
+      const playedY = played.getFullYear();
+      const playedM = played.getMonth();
+      const playedD = played.getDate();
+
+      const nowY = now.getFullYear();
+      const nowM = now.getMonth();
+      const nowD = now.getDate();
+
+      return playedY === nowY && playedM === nowM && playedD === nowD;
     } catch {
-      return m[1];
+      return false;
     }
   }
 
-  function getPlayerNameFromNavbar() {
-    // <a href="/me" class="nav-link"> My stats · {{ me.name }}</a>
-    const link = document.querySelector('a[href="/me"]');
-    if (!link) return null;
-    const txt = (link.textContent || "").trim();
-    // split on the · separator
-    const parts = txt.split("·");
-    if (parts.length < 2) return null;
-    return parts[1].trim();
-  }
-
-  function buildImportPayload(summary, playerName, boardSlug) {
-    // summary is what we stored from GeoGuessr (__NEXT_DATA__)
-    const roundsSource = Array.isArray(summary.rounds)
-      ? summary.rounds
-      : [];
-
-    const rounds = roundsSource.map((r) => {
-      const score = typeof r.score === "number" ? r.score : 0;
-      const dist =
-        typeof r.distance_m === "number" ? r.distance_m : null;
-
-      const guess = r.guess || {};
-      const correct = r.correct || {};
-
-      return {
-        score,
-        distance_m: dist,
-        guess_lat:
-          typeof guess.lat === "number" ? guess.lat : null,
-        guess_lng:
-          typeof guess.lng === "number" ? guess.lng : null,
-        target_lat:
-          typeof correct.lat === "number" ? correct.lat : null,
-        target_lng:
-          typeof correct.lng === "number" ? correct.lng : null
-      };
-    });
-
-    const totalScore =
-      typeof summary.total_score === "number"
-        ? summary.total_score
-        : rounds.reduce((acc, r) => acc + (r.score || 0), 0);
-
-    const totalDistance =
-      typeof summary.total_distance_m === "number"
-        ? summary.total_distance_m
-        : rounds.reduce(
-            (acc, r) => acc + (r.distance_m || 0),
-            0
-          );
-
-    const gameId =
-      summary.dailyQuizId ||
-      summary.quizId ||
-      summary.token ||
-      null;
-
-    return {
-      player_name: playerName,
-      board_slug: boardSlug,
-      total_score: totalScore,
-      total_distance_m: totalDistance,
-      game_id: gameId,
-      rounds
-    };
-  }
-
-  async function sendImport(summary) {
-    const boardSlug = getBoardSlug();
-    if (!boardSlug) {
-      alert(
-        "GeoLead Bridge:\nOpen a specific board URL like /board/your-board before importing."
-      );
-      return;
-    }
-
-    const playerName = getPlayerNameFromNavbar();
-    if (!playerName) {
-      alert(
-        "GeoLead Bridge:\nCould not detect your player name. Make sure you are logged in on GeoLead."
-      );
-      return;
-    }
-
-    const payload = buildImportPayload(summary, playerName, boardSlug);
-    log("Sending payload to GeoLead backend:", payload);
-
-    const url = window.location.origin + "/api/geoguessr/import";
-
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        credentials: "include" // keep session cookies if needed
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error(
-          EXT_LOG_PREFIX,
-          "Backend error:",
-          resp.status,
-          text
-        );
-        alert(
-          "GeoLead Bridge:\nImport failed, backend returned " +
-            resp.status +
-            ". See console for details."
-        );
-        return;
-      }
-
-      const data = await resp.json();
-      log("Import success:", data);
-
-      alert(
-        "GeoLead Bridge:\nImported game successfully!\n" +
-          "Total score: " +
-          (data.total_score ?? "n/a") +
-          "\nTotal distance: " +
-          (data.total_distance_m != null
-            ? (data.total_distance_m / 1000).toFixed(1) + " km"
-            : "n/a")
-      );
-
-      // Optional: jump straight to today's round for this board
-      const todayUrl =
-        window.location.origin +
-        "/board/" +
-        encodeURIComponent(boardSlug) +
-        "/today";
-      window.location.href = todayUrl;
-    } catch (e) {
-      console.error(EXT_LOG_PREFIX, "Request failed:", e);
-      alert(
-        "GeoLead Bridge:\nCould not reach GeoLead backend.\n" +
-          "Check that it is running (localhost:8000) or the production site is up."
-      );
-    }
-  }
-
-  function importFromStorage() {
-    chrome.storage.local.get("geoguessrLastGame", (result) => {
+  function importFromStorage(boardSlug) {
+    chrome.storage.local.get("geoguessrLastGame", async (result) => {
       const data = result.geoguessrLastGame;
       if (!data) {
-        alert(
-          "GeoLead Bridge:\nNo recent GeoGuessr game found.\nFinish a game on geoguessr.com first."
+        showAlert(
+          "GeoLead Bridge:\nNo recent GeoGuessr game found.\nFinish today's daily game on geoguessr.com first."
         );
         return;
       }
 
-      log("Loaded GeoGuessr data from storage:", data);
-      void sendImport(data);
+      log("Imported GeoGuessr data from storage:", data);
+
+      // --- date checks (same as before) ---
+      if (!data.played_at) {
+        showAlert(
+          "GeoLead Bridge:\nCannot detect when you last played.\nPlease finish today's game again and then import."
+        );
+        return;
+      }
+
+      if (!isToday(data.played_at)) {
+        showAlert(
+          "GeoLead Bridge:\nYour last saved GeoGuessr game is not from today.\nFinish today's daily game and try again."
+        );
+        return;
+      }
+
+      // ---------- NEW: validate that we actually have non-zero data ----------
+      const roundsSource = Array.isArray(data.rounds) ? data.rounds : [];
+
+      // Compute total distance from rounds
+      const totalDistanceM = roundsSource.reduce((acc, r) => {
+        const d = typeof r.distance_m === "number" ? r.distance_m : 0;
+        return acc + d;
+      }, 0);
+
+      // Prefer total_score from GeoGuessr, otherwise sum per-round scores
+      let totalScore =
+        typeof data.total_score === "number" ? data.total_score : 0;
+
+      if (totalScore <= 0) {
+        totalScore = roundsSource.reduce((acc, r) => {
+          const s = typeof r.score === "number" ? r.score : 0;
+          return acc + s;
+        }, 0);
+      }
+
+      // At least one round must have a positive score OR distance
+      const nonZeroRounds = roundsSource.filter((r) => {
+        const s =
+          typeof r.score === "number" ? r.score : null;
+        const d =
+          typeof r.distance_m === "number" ? r.distance_m : null;
+        return (s !== null && s > 0) || (d !== null && d > 0);
+      });
+
+      if (!nonZeroRounds.length || (totalScore <= 0 && totalDistanceM <= 0)) {
+        // This is the key fix: we refuse to submit "all zeros" games
+        showAlert(
+          "GeoLead Bridge:\n" +
+            "Could not find a finished GeoGuessr game with non-zero results.\n" +
+            "Make sure you have completed today's daily game and are on the final results screen."
+        );
+        return;
+      }
+
+      // ---------- Build payload for GeoLead backend ----------
+      const rounds = roundsSource.map((r) => ({
+        score: typeof r.score === "number" ? Math.round(r.score) : 0,
+        distance_m:
+          typeof r.distance_m === "number" ? r.distance_m : null,
+        guess_lat:
+          r.guess && typeof r.guess.lat === "number" ? r.guess.lat : null,
+        guess_lng:
+          r.guess && typeof r.guess.lng === "number" ? r.guess.lng : null,
+        target_lat:
+          r.correct && typeof r.correct.lat === "number"
+            ? r.correct.lat
+            : null,
+        target_lng:
+          r.correct && typeof r.correct.lng === "number"
+            ? r.correct.lng
+            : null
+      }));
+
+      const body = {
+        // player_name is ignored server-side; still sent for debugging
+        player_name: data.user?.nick || null,
+        board_slug: boardSlug,
+        total_score: totalScore,
+        total_distance_m: totalDistanceM,
+        game_id: data.dailyQuizId || data.token || null,
+        played_at: data.played_at,
+        rounds
+      };
+
+      log("Sending payload to GeoLead /api/geoguessr/import:", body);
+
+      try {
+        const resp = await fetch("/api/geoguessr/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          credentials: "include"
+        });
+
+        const text = await resp.text();
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          // ignore parse errors, we'll fall back to body values
+        }
+
+        if (!resp.ok) {
+          const detail =
+            (json && json.detail) || `HTTP ${resp.status}`;
+          showAlert(
+            `GeoLead Bridge:\nFailed to import game.\n${detail}`
+          );
+          return;
+        }
+
+        const finalScore =
+          json?.total_score ?? body.total_score ?? "n/a";
+        const finalDistanceM =
+          json?.total_distance_m ?? body.total_distance_m ?? 0;
+
+        const finalDistanceKm = (finalDistanceM / 1000).toFixed(1);
+
+        showAlert(
+          `GeoLead Bridge:\nImported game successfully!\n` +
+            `Total score: ${finalScore}\n` +
+            `Total distance: ${finalDistanceKm} km`
+        );
+
+        // Redirect to today's round for this board
+        window.location.href = `/board/${encodeURIComponent(
+          boardSlug
+        )}/today`;
+      } catch (err) {
+        console.error(EXT_LOG_PREFIX, "Import error:", err);
+        showAlert(
+          "GeoLead Bridge:\nNetwork error while importing game.\nCheck that GeoLead is running."
+        );
+      }
     });
   }
 
-  // ---- Floating button on GeoLead ----
+  function setupOnSubmitPage() {
+    const path = window.location.pathname || "";
+    const match = path.match(/^\/board\/([^\/]+)\/submit\/?$/);
+    if (!match) {
+      return; // not on /board/{slug}/submit
+    }
+    const boardSlug = match[1];
 
-  function createFloatingButton() {
-    if (document.getElementById("geolead-import-btn")) return;
+    const btn = document.getElementById("geolead-import-btn");
+    if (!btn) {
+      log(
+        "Submit page detected, but #geolead-import-btn not found in DOM."
+      );
+      return;
+    }
 
-    const btn = document.createElement("button");
-    btn.id = "geolead-import-btn";
-    btn.textContent = "Import GeoGuessr";
-
-    Object.assign(btn.style, {
-      position: "fixed",
-      bottom: "16px",
-      right: "16px",
-      zIndex: "2147483647",
-      padding: "10px 16px",
-      fontSize: "14px",
-      fontFamily:
-        "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      borderRadius: "999px",
-      border: "none",
-      boxShadow: "0 2px 6px rgba(0,0,0,0.3)",
-      cursor: "pointer",
-      background: "#10b981",
-      color: "#fff"
-    });
-
-    btn.addEventListener("mouseenter", () => {
-      btn.style.filter = "brightness(1.1)";
-    });
-    btn.addEventListener("mouseleave", () => {
-      btn.style.filter = "none";
-    });
-
-    btn.addEventListener("click", importFromStorage);
-
-    document.body.appendChild(btn);
-    log("Floating Import GeoGuessr button injected.");
+    btn.addEventListener("click", () => importFromStorage(boardSlug));
+    log(
+      "Submit page detected for board:",
+      boardSlug,
+      "Import button wired."
+    );
   }
 
   if (
     document.readyState === "complete" ||
     document.readyState === "interactive"
   ) {
-    createFloatingButton();
+    setupOnSubmitPage();
   } else {
-    window.addEventListener("DOMContentLoaded", createFloatingButton, {
+    window.addEventListener("DOMContentLoaded", setupOnSubmitPage, {
       once: true
     });
   }

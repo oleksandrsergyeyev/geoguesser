@@ -309,28 +309,6 @@ class SubmitEntryIn(BaseModel):
     round3: int = Field(..., ge=0, le=5000)
     board_slug: Optional[str] = Field(default=None)  # API only; UI uses path param
 
-class GeoRoundIn(BaseModel):
-    score: int = Field(..., ge=0, le=5000)
-    distance_m: Optional[float] = Field(default=None, ge=0)
-    # flat coords – easy to send from the extension
-    guess_lat: Optional[float] = None
-    guess_lng: Optional[float] = None
-    target_lat: Optional[float] = None
-    target_lng: Optional[float] = None
-
-
-class GeoGuessrImportIn(BaseModel):
-    player_name: str = Field(..., min_length=1, max_length=80)
-    player_email: Optional[str] = Field(default=None, max_length=255)
-    board_slug: str = Field(..., min_length=1, max_length=120)
-
-    # optional game-level metadata
-    total_score: Optional[int] = Field(default=None, ge=0)
-    max_score: Optional[int] = Field(default=None, ge=0)
-    total_distance_m: Optional[float] = Field(default=None, ge=0)
-    played_at: Optional[datetime] = None  # if not provided, we use "now"
-
-    rounds: List[GeoRoundIn] = Field(..., min_items=1, max_items=10)
 
 class GeoGuessrRoundIn(BaseModel):
     score: int = Field(..., ge=0, le=5000)
@@ -347,7 +325,10 @@ class GeoGuessrImportIn(BaseModel):
     total_score: Optional[int] = Field(default=None, ge=0)
     total_distance_m: Optional[float] = Field(default=None, ge=0)
     game_id: Optional[str] = None
+    # extension will send an ISO timestamp (captured_at)
+    played_at: Optional[datetime] = None
     rounds: List[GeoGuessrRoundIn]
+
 
 # ---------- Utilities ----------------------------------------------------------
 def utcnow() -> datetime:
@@ -835,31 +816,64 @@ async def api_submit_entry(payload: SubmitEntryIn, db: Session = Depends(get_db)
     db.commit()
     return {"ok": True, "entry_id": entry.id, "total": total}
 
+
 @app.post("/api/geoguessr/import")
 async def api_geoguessr_import(
-    payload: GeoGuessrImportIn, db: Session = Depends(get_db)
+    payload: GeoGuessrImportIn,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
     """
     Import a GeoGuessr daily game with per-round coordinates.
+
+    - Uses the currently logged-in GeoLead user (session), NOT the GeoGuessr nick.
+    - Rejects imports where the game is not from "today" (UTC).
     - Upserts ScoreEntry for today (player + board).
     - Upserts GeoGame + GeoRound rows for map visualization.
     """
-    # 1) Resolve player (by name, case-insensitive – same as /api/submit_entry)
-    player = db.execute(
-        select(Player).where(func.lower(Player.name) == payload.player_name.lower())
-    ).scalar_one_or_none()
-    if not player:
-        player = Player(name=payload.player_name)
-        db.add(player)
-        db.flush()
 
-    # 2) Resolve board
+    # 0) Logged-in GeoLead user
+    player = current_user(request, db)
+    if not player:
+        raise HTTPException(status_code=401, detail="Login required to import scores")
+
+    # 1) Validate board
     if not payload.board_slug or payload.board_slug == "global":
         raise HTTPException(400, "Submissions must target a specific board")
 
     board = get_board_by_slug(db, payload.board_slug)
     if not board:
         raise HTTPException(400, "Board not found")
+
+    # 2) Validate that the game is from "today"
+    now = utcnow()
+    today_start = start_of_today_utc(now)
+
+    if payload.played_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "GeoGuessr data is missing a timestamp. "
+                "Please refresh the GeoGuessr results page and try again."
+            ),
+        )
+
+    # Normalize to UTC
+    if payload.played_at.tzinfo is None:
+        game_dt_utc = payload.played_at.replace(tzinfo=timezone.utc)
+    else:
+        game_dt_utc = payload.played_at.astimezone(timezone.utc)
+
+    game_day_start = start_of_today_utc(game_dt_utc)
+
+    if game_day_start != today_start:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Last GeoGuessr game is not from today. "
+                "Finish today’s daily game first, then try again."
+            ),
+        )
 
     # 3) Compute totals if they weren't provided
     round_scores = [int(r.score or 0) for r in payload.rounds]
@@ -879,15 +893,13 @@ async def api_geoguessr_import(
     )
 
     # 4) Upsert ScoreEntry for today (per player+board)
-    now = utcnow()
-    today = start_of_today_utc(now)
     entry = (
         db.execute(
             select(ScoreEntry)
             .where(
                 ScoreEntry.player_id == player.id,
                 ScoreEntry.board_id == board.id,
-                ScoreEntry.played_at >= today,
+                ScoreEntry.played_at >= today_start,
             )
             .limit(1)
         )
@@ -936,7 +948,6 @@ async def api_geoguessr_import(
         game.total_distance_m = total_distance_m
 
     # 6) Replace GeoRound rows for this game
-    #    (cheap enough for 3–5 rounds)
     for existing in list(game.rounds):
         db.delete(existing)
     game.rounds.clear()
@@ -962,7 +973,6 @@ async def api_geoguessr_import(
         "total_score": total_score,
         "total_distance_m": total_distance_m,
     }
-
 
 @app.get("/health")
 async def health():

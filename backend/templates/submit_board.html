@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Submit · {{ board.name }}{% endblock %}
 {% block content %}
-  <h1>Submit to {{ board.name }}</h1>
+  <h1>Submit – {{ board.name }}</h1>
 
   {% if limit_reached %}
     <div class="card" style="max-width:600px;">
@@ -11,101 +11,123 @@
       </p>
     </div>
   {% else %}
-    <div class="card" style="max-width:860px;">
-      <form method="post" action="/board/{{ board.slug }}/submit" class="form" id="submit-form">
-        <div class="grid-3">
-          <div>
-            <label>Round 1</label>
-            <input type="number" name="round1" min="0" max="5000" required>
-          </div>
-          <div>
-            <label>Round 2</label>
-            <input type="number" name="round2" min="0" max="5000" required>
-          </div>
-          <div>
-            <label>Round 3</label>
-            <input type="number" name="round3" min="0" max="5000" required>
-          </div>
-        </div>
+    <div class="card" style="max-width:880px;">
+      <h2>Submit today’s game</h2>
+      <p>
+        Scores are now imported automatically from GeoGuessr using the
+        <strong>GeoLead ⇄ GeoGuessr</strong> browser extension.
+      </p>
 
-        <div class="grid-3 paste-grid">
-          <div class="paste-wrap">
-            <label>Screenshot — Round 1</label>
-            <div class="paste-box" tabindex="0" data-target="shot-r1">
-              <span class="hint">Click and press <b>Ctrl/⌘+V</b></span>
-              <img id="preview-r1" alt="" style="display:none" />
-            </div>
-            <input type="hidden" name="screenshot_r1" id="shot-r1">
-          </div>
+      <ol class="list" style="margin-top:8px; padding-left:20px;">
+        <li>
+          Finish today’s daily game on
+          <a href="https://www.geoguessr.com" target="_blank" rel="noreferrer">
+            geoguessr.com
+          </a>.
+        </li>
+        <li>
+          Come back to this page:
+          <code>/board/{{ board.slug }}/submit</code>.
+        </li>
+        <li>
+          Click
+          <button id="geolead-import-btn" type="button" class="btn small">
+            Import today’s game results
+          </button>
+          (the extension will send today’s scores and distances for each round).
+        </li>
+      </ol>
 
-          <div class="paste-wrap">
-            <label>Screenshot — Round 2</label>
-            <div class="paste-box" tabindex="0" data-target="shot-r2">
-              <span class="hint">Click and press <b>Ctrl/⌘+V</b></span>
-              <img id="preview-r2" alt="" style="display:none" />
-            </div>
-            <input type="hidden" name="screenshot_r2" id="shot-r2">
-          </div>
+      <p class="muted" style="margin-top:12px;">
+        After import you will be redirected to the <strong>Today’s round</strong> view
+        for this board where you can see the map and distances for each round.
+      </p>
 
-          <div class="paste-wrap">
-            <label>Screenshot — Round 3</label>
-            <div class="paste-box" tabindex="0" data-target="shot-r3">
-              <span class="hint">Click and press <b>Ctrl/⌘+V</b></span>
-              <img id="preview-r3" alt="" style="display:none" />
-            </div>
-            <input type="hidden" name="screenshot_r3" id="shot-r3">
-          </div>
-        </div>
-
-        <div style="display:flex; gap:10px; align-items:center; margin-top:10px;">
-          <button class="btn" type="submit">Submit</button>
-          <a class="btn ghost" href="/board/{{ board.slug }}">Cancel</a>
-        </div>
-      </form>
+      <p class="muted" style="margin-top:8px;">
+        If you don’t see the button, make sure the extension is installed and enabled,
+        and that you are logged in on both GeoGuessr and GeoLead.
+      </p>
     </div>
+
+    <script>
+      (function () {
+        const boardSlug = "{{ board.slug }}";
+        const geoleadPlayerName = "{{ me.name|e }}";
+
+        window.addEventListener("geolead:geoguessr-import", async (event) => {
+          const game = event.detail || {};
+
+          if (!game || !Array.isArray(game.rounds) || game.rounds.length === 0) {
+            alert(
+              "GeoLead Bridge:\n" +
+              "Could not find any rounds in your last GeoGuessr game.\n" +
+              "Finish today’s daily game first, then try again."
+            );
+            return;
+          }
+
+          const payload = {
+            // This will be IGNORED by the backend for the player mapping (see below),
+            // but we keep it for debugging / logging.
+            player_name: geoleadPlayerName,
+            board_slug: boardSlug,
+            total_score: game.total_score ?? null,
+            total_distance_m: game.total_distance_m ?? null,
+            game_id: game.dailyQuizId || game.token || null,
+            // NEW: timestamp when the extension captured the game
+            played_at: game.played_at || null,
+            rounds: game.rounds.slice(0, 3).map((r) => ({
+              score: r.score ?? 0,
+              distance_m: r.distance_m ?? null,
+              guess_lat: r.guess && typeof r.guess.lat === "number" ? r.guess.lat : null,
+              guess_lng: r.guess && typeof r.guess.lng === "number" ? r.guess.lng : null,
+              target_lat: r.correct && typeof r.correct.lat === "number" ? r.correct.lat : null,
+              target_lng: r.correct && typeof r.correct.lng === "number" ? r.correct.lng : null
+            }))
+          };
+
+          try {
+            const resp = await fetch("/api/geoguessr/import", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok) {
+              const msg =
+                (data && (data.detail || data.error)) ||
+                "Import failed for an unknown reason.";
+              alert("GeoLead Bridge:\n" + msg);
+              return;
+            }
+
+            const totalScore = data.total_score ?? payload.total_score ?? "n/a";
+            const totalDistKm = data.total_distance_m
+              ? (data.total_distance_m / 1000).toFixed(1) + " km"
+              : (payload.total_distance_m
+                  ? (payload.total_distance_m / 1000).toFixed(1) + " km"
+                  : "n/a");
+
+            alert(
+              "GeoLead Bridge:\n" +
+              "Imported game successfully!\n" +
+              "Total score: " + totalScore + "\n" +
+              "Total distance: " + totalDistKm
+            );
+
+            window.location.href = "/board/" + boardSlug + "/today";
+          } catch (err) {
+            console.error("GeoLead Bridge import error:", err);
+            alert(
+              "GeoLead Bridge:\n" +
+              "Import failed due to a network or server error.\n" +
+              "Please try again."
+            );
+          }
+        });
+      })();
+    </script>
   {% endif %}
-
-  <p class="muted" style="margin-top:12px;">
-    After submitting, you can view everyone’s results and screenshots on
-    <a href="/board/{{ board.slug }}/today">Today’s round</a>.
-  </p>
-
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  async function uploadBlob(blob){
-    const fd = new FormData();
-    fd.append('image', blob, 'paste.png');
-    const r = await fetch('/api/paste_image', { method:'POST', body: fd });
-    if(!r.ok) throw new Error('upload failed');
-    const j = await r.json();
-    return j.url;
-  }
-
-  function bindPaste(box){
-    const targetId = box.dataset.target;
-    const input = document.getElementById(targetId);
-    const prev  = document.getElementById('preview-' + targetId.split('-')[1]);
-
-    box.addEventListener('paste', async (e) => {
-      const items = e.clipboardData?.items || [];
-      const imgItem = Array.from(items).find(x => x.type.startsWith('image/'));
-      if (!imgItem) return;
-      e.preventDefault();
-      try{
-        const blob = imgItem.getAsFile();
-        prev.src = URL.createObjectURL(blob);
-        prev.style.display = 'block';
-        box.classList.add('has-image');
-        const url = await uploadBlob(blob);
-        input.value = url;
-      }catch(err){
-        console.error(err);
-        alert('Could not read/upload pasted image.');
-      }
-    });
-  }
-
-  document.querySelectorAll('.paste-box').forEach(bindPaste);
-});
-</script>
 {% endblock %}
