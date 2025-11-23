@@ -20,10 +20,12 @@
 
       <ol class="list" style="margin-top:8px; padding-left:20px;">
         <li>
-          Finish today’s daily game on
+          Play today’s daily game on
           <a href="https://www.geoguessr.com" target="_blank" rel="noreferrer">
             geoguessr.com
           </a>.
+          On the final results screen, <strong>click the green “Finish game” button</strong>.
+          GeoLead can only import games after you press “Finish game”.
         </li>
         <li>
           Come back to this page:
@@ -47,11 +49,23 @@
         If you don’t see the button, make sure the extension is installed and enabled,
         and that you are logged in on both GeoGuessr and GeoLead.
       </p>
-            <p class="muted" style="margin-top:16px;">
+
+      <p class="muted" style="margin-top:8px;">
+        <strong>Important:</strong> If you did not press “Finish game” in GeoGuessr,
+        GeoLead will not find today’s game and the import will fail.
+      </p>
+
+      <p class="muted" style="margin-top:16px;">
         Don’t have the browser extension yet?
-        <a id="geolead-ext-install-link" href="/extensions" target="_blank" rel="noreferrer">
-          Install GeoLead ⇄ GeoGuessr extension for your browser
-        </a>.
+        <a
+          id="geolead-ext-install-link"
+          class="btn small"
+          href="/extensions"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Install the browser extension
+        </a>
       </p>
 
       <script>
@@ -62,8 +76,8 @@
           const ua = navigator.userAgent || "";
           let url = "/extensions"; // fallback, e.g. a help page on GeoLead
 
-          // IMPORTANT: replace the placeholders below with your real store URLs
-          const chromeUrl  = "https://chromewebstore.google.com/detail/REPLACE_WITH_REAL_ID";
+          // Store URLs
+          const chromeUrl  = "https://chromewebstore.google.com/detail/geolead-%E2%87%84-geoguessr-bridg/ibplmeklhbagilmglbaoipeifnpmnbhe";
           const edgeUrl    = "https://microsoftedge.microsoft.com/addons/detail/REPLACE_WITH_REAL_ID";
           const firefoxUrl = "https://addons.mozilla.org/en-US/firefox/addon/REPLACE_WITH_REAL_ID/";
           const safariUrl  = "https://apps.apple.com/app/idREPLACE_WITH_REAL_ID";
@@ -97,7 +111,7 @@
             alert(
               "GeoLead Bridge:\n" +
               "Could not find any rounds in your last GeoGuessr game.\n" +
-              "Finish today’s daily game first, then try again."
+              "Finish today’s daily game first (and press “Finish game” at the end), then try again."
             );
             return;
           }
@@ -110,7 +124,7 @@
             total_score: game.total_score ?? null,
             total_distance_m: game.total_distance_m ?? null,
             game_id: game.dailyQuizId || game.token || null,
-            // NEW: timestamp when the extension captured the game
+            // timestamp when the extension captured the game
             played_at: game.played_at || null,
             rounds: game.rounds.slice(0, 3).map((r) => ({
               score: r.score ?? 0,
