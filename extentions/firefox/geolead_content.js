@@ -1,6 +1,6 @@
 // geolead_content.js
 (function () {
-  const EXT_LOG_PREFIX = "[GeoLead Bridge]";
+  const EXT_LOG_PREFIX = "[GeoLead Bridge CT]";
 
   function log(...args) {
     console.log(EXT_LOG_PREFIX, ...args);
@@ -33,7 +33,11 @@
   }
 
   function importFromStorage(boardSlug) {
+    log("Import requested for board:", boardSlug);
+
     chrome.storage.local.get("geoguessrLastGame", async (result) => {
+      log("chrome.storage.local.get result:", result);
+
       const data = result.geoguessrLastGame;
       if (!data) {
         showAlert(
@@ -42,9 +46,8 @@
         return;
       }
 
-      log("Imported GeoGuessr data from storage:", data);
+      log("Loaded geoguessrLastGame:", data);
 
-      // --- date checks (same as before) ---
       if (!data.played_at) {
         showAlert(
           "GeoLead Bridge:\nCannot detect when you last played.\nPlease finish today's game again and then import."
@@ -59,76 +62,76 @@
         return;
       }
 
-      // ---------- NEW: validate that we actually have non-zero data ----------
-      const roundsSource = Array.isArray(data.rounds) ? data.rounds : [];
-
-      // Compute total distance from rounds
-      const totalDistanceM = roundsSource.reduce((acc, r) => {
-        const d = typeof r.distance_m === "number" ? r.distance_m : 0;
-        return acc + d;
-      }, 0);
-
-      // Prefer total_score from GeoGuessr, otherwise sum per-round scores
-      let totalScore =
-        typeof data.total_score === "number" ? data.total_score : 0;
-
-      if (totalScore <= 0) {
-        totalScore = roundsSource.reduce((acc, r) => {
-          const s = typeof r.score === "number" ? r.score : 0;
-          return acc + s;
-        }, 0);
-      }
-
-      // At least one round must have a positive score OR distance
-      const nonZeroRounds = roundsSource.filter((r) => {
-        const s =
-          typeof r.score === "number" ? r.score : null;
-        const d =
-          typeof r.distance_m === "number" ? r.distance_m : null;
-        return (s !== null && s > 0) || (d !== null && d > 0);
-      });
-
-      if (!nonZeroRounds.length || (totalScore <= 0 && totalDistanceM <= 0)) {
-        // This is the key fix: we refuse to submit "all zeros" games
+      if (!Array.isArray(data.rounds) || data.rounds.length === 0) {
         showAlert(
-          "GeoLead Bridge:\n" +
-            "Could not find a finished GeoGuessr game with non-zero results.\n" +
-            "Make sure you have completed today's daily game and are on the final results screen."
+          "GeoLead Bridge:\nSaved game has no rounds.\nFinish today's daily game and try again."
         );
         return;
       }
 
-      // ---------- Build payload for GeoLead backend ----------
-      const rounds = roundsSource.map((r) => ({
-        score: typeof r.score === "number" ? Math.round(r.score) : 0,
-        distance_m:
-          typeof r.distance_m === "number" ? r.distance_m : null,
-        guess_lat:
-          r.guess && typeof r.guess.lat === "number" ? r.guess.lat : null,
-        guess_lng:
-          r.guess && typeof r.guess.lng === "number" ? r.guess.lng : null,
-        target_lat:
-          r.correct && typeof r.correct.lat === "number"
-            ? r.correct.lat
-            : null,
-        target_lng:
-          r.correct && typeof r.correct.lng === "number"
-            ? r.correct.lng
-            : null
-      }));
+      // Build rounds payload
+      const rounds = (data.rounds || []).map((r, idx) => {
+        const roundPayload = {
+          score: typeof r.score === "number" ? r.score : 0,
+          distance_m:
+            typeof r.distance_m === "number" ? r.distance_m : null,
+          guess_lat:
+            r.guess && typeof r.guess.lat === "number" ? r.guess.lat : null,
+          guess_lng:
+            r.guess && typeof r.guess.lng === "number" ? r.guess.lng : null,
+          target_lat:
+            r.correct && typeof r.correct.lat === "number"
+              ? r.correct.lat
+              : null,
+          target_lng:
+            r.correct && typeof r.correct.lng === "number"
+              ? r.correct.lng
+              : null
+        };
+        log(`Round ${idx + 1} payload:`, roundPayload);
+        return roundPayload;
+      });
+
+      // --- FIX: ensure player_name is ALWAYS a non-empty string ---
+      let rawNick =
+        data.user && typeof data.user.nick === "string"
+          ? data.user.nick
+          : "";
+
+      if (typeof rawNick === "string") {
+        rawNick = rawNick.trim();
+      } else {
+        rawNick = String(rawNick || "");
+      }
+
+      if (!rawNick) {
+        // fallback so Pydantic min_length=1 is satisfied
+        rawNick = "GeoLead player";
+      }
+
+      const playerName = rawNick;
+      log("Using player_name:", playerName);
+      // ------------------------------------------------------------
+
+      const totalDistance = (data.rounds || []).reduce((acc, r) => {
+        const d = typeof r.distance_m === "number" ? r.distance_m : 0;
+        return acc + d;
+      }, 0);
 
       const body = {
-        // player_name is ignored server-side; still sent for debugging
-        player_name: data.user?.nick || null,
+        player_name: playerName,
         board_slug: boardSlug,
-        total_score: totalScore,
-        total_distance_m: totalDistanceM,
+        total_score:
+          typeof data.total_score === "number"
+            ? data.total_score
+            : null,
+        total_distance_m: totalDistance || null,
         game_id: data.dailyQuizId || data.token || null,
         played_at: data.played_at,
         rounds
       };
 
-      log("Sending payload to GeoLead /api/geoguessr/import:", body);
+      log("Final payload to /api/geoguessr/import:", body);
 
       try {
         const resp = await fetch("/api/geoguessr/import", {
@@ -143,29 +146,42 @@
         try {
           json = JSON.parse(text);
         } catch {
-          // ignore parse errors, we'll fall back to body values
+          // not JSON, keep as text
         }
+
+        log("Import response status:", resp.status);
+        log("Raw import response text:", text);
+        log("Parsed import response JSON:", json);
 
         if (!resp.ok) {
           const detail =
-            (json && json.detail) || `HTTP ${resp.status}`;
+            (json && (json.detail || json.error)) ||
+            (typeof text === "string" && text.trim().length
+              ? text
+              : `HTTP ${resp.status}`);
           showAlert(
-            `GeoLead Bridge:\nFailed to import game.\n${detail}`
+            "GeoLead Bridge:\nFailed to import game.\n" + detail
           );
           return;
         }
 
-        const finalScore =
-          json?.total_score ?? body.total_score ?? "n/a";
-        const finalDistanceM =
-          json?.total_distance_m ?? body.total_distance_m ?? 0;
+        const totalScore = json?.total_score ?? body.total_score ?? "n/a";
+        const totalDistanceM =
+          json?.total_distance_m ?? body.total_distance_m ?? null;
 
-        const finalDistanceKm = (finalDistanceM / 1000).toFixed(1);
+        let totalDistanceKmText = "n/a";
+        if (typeof totalDistanceM === "number" && totalDistanceM > 0) {
+          totalDistanceKmText = (totalDistanceM / 1000).toFixed(1) + " km";
+        }
 
         showAlert(
-          `GeoLead Bridge:\nImported game successfully!\n` +
-            `Total score: ${finalScore}\n` +
-            `Total distance: ${finalDistanceKm} km`
+          "GeoLead Bridge:\n" +
+            "Imported game successfully!\n" +
+            "Total score: " +
+            totalScore +
+            "\n" +
+            "Total distance: " +
+            totalDistanceKmText
         );
 
         // Redirect to today's round for this board

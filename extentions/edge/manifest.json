@@ -1,14 +1,21 @@
 {
   "manifest_version": 3,
-  "name": "GeoLead ⇄ GeoGuessr Bridge (Edge)",
-  "version": "0.1.0",
-  "description": "Automatically captures GeoGuessr daily game results and makes them available to GeoLead.",
-  "permissions": ["storage"],
+  "name": "GeoLead ⇄ GeoGuessr Bridge",
+  "version": "0.2.0",
+  "description": "Bridges GeoGuessr daily game results into GeoLead boards.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "webRequest"
+  ],
   "host_permissions": [
     "https://www.geoguessr.com/*",
-    "https://www.geolead.fun/*",
-    "http://localhost/*"
+    "http://127.0.0.1:8000/*"
   ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "content_scripts": [
     {
       "matches": ["https://www.geoguessr.com/*"],
@@ -16,10 +23,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://www.geolead.fun/*",
-        "http://localhost/*"
-      ],
+      "matches": ["http://127.0.0.1:8000/board/*/submit*"],
       "js": ["geolead_content.js"],
       "run_at": "document_idle"
     }
