@@ -6,29 +6,40 @@ from pathlib import Path
 from typing import Optional, Literal, List
 
 from fastapi import FastAPI, Depends, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field
 
 from sqlalchemy import (
-    create_engine, Integer, String, DateTime, ForeignKey,
-    select, func
+    create_engine,
+    Integer,
+    String,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    select,
+    func,
+    delete,
 )
 from sqlalchemy.orm import (
-    DeclarativeBase, Mapped, mapped_column, relationship,
-    sessionmaker, Session
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+    sessionmaker,
+    Session,
 )
 from sqlalchemy.exc import IntegrityError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
-from fastapi.responses import FileResponse
 
-from sqlalchemy import inspect, text  # add these imports
-import uuid, shutil
+from sqlalchemy import inspect, text
+import uuid
+import shutil
 import re
-RETAIN_DAYS = int(os.getenv("UPLOAD_RETAIN_DAYS", "1"))  # keep only today by default
 
+RETAIN_DAYS = int(os.getenv("UPLOAD_RETAIN_DAYS", "1"))  # keep only today by default
 
 # ---------- Paths & DB ---------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
@@ -46,84 +57,138 @@ else:
 
 # SQLite needs special connect args; Postgres does not
 connect_args = {"check_same_thread": False} if DB_URL.startswith("sqlite:///") else {}
-engine = create_engine(DB_URL, echo=False, future=True, pool_pre_ping=True, connect_args=connect_args)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+engine = create_engine(
+    DB_URL, echo=False, future=True, pool_pre_ping=True, connect_args=connect_args
+)
+SessionLocal = sessionmaker(
+    bind=engine, autoflush=False, autocommit=False, future=True
+)
+
 
 # ---------- ORM Models ---------------------------------------------------------
 class Base(DeclarativeBase):
     pass
+
 
 class Player(Base):
     __tablename__ = "players"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(80), index=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), index=True)
-    entries: Mapped[List['ScoreEntry']] = relationship(back_populates="player")
+    entries: Mapped[List["ScoreEntry"]] = relationship(back_populates="player")
+
 
 class Board(Base):
     __tablename__ = "boards"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    owner_player_id: Mapped[Optional[int]] = mapped_column(ForeignKey("players.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    owner_player_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("players.id"), nullable=True
+    )
+
 
 class ScoreEntry(Base):
     __tablename__ = "score_entries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), index=True
+    )
     played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     round1: Mapped[int] = mapped_column(Integer)
     round2: Mapped[int] = mapped_column(Integer)
     round3: Mapped[int] = mapped_column(Integer)
     total_score: Mapped[int] = mapped_column(Integer)
-    board_id: Mapped[Optional[int]] = mapped_column(ForeignKey("boards.id"), index=True, nullable=True)
+    board_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("boards.id"), index=True, nullable=True
+    )
 
-    # screenshots (per round)
-    screenshot_r1_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    screenshot_r2_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    screenshot_r3_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # screenshots (per round) – values are URL paths like "/images/<id>"
+    screenshot_r1_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    screenshot_r2_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    screenshot_r3_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     # legacy single screenshot (kept for backward compat; optional)
-    screenshot_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    screenshot_path: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
 
     player: Mapped[Player] = relationship(back_populates="entries")
 
+
+class ImageBlob(Base):
+    __tablename__ = "images"
+
+    # 32-character hex UUID string
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    mime_type: Mapped[str] = mapped_column(String(100))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
+
 def ensure_round_shot_columns():
     insp = inspect(engine)
-    cols = {c['name'] for c in insp.get_columns('score_entries')}
+    cols = {c["name"] for c in insp.get_columns("score_entries")}
     stmts = []
-    if 'screenshot_r1_path' not in cols:
-        stmts.append("ALTER TABLE score_entries ADD COLUMN screenshot_r1_path VARCHAR(255)")
-    if 'screenshot_r2_path' not in cols:
-        stmts.append("ALTER TABLE score_entries ADD COLUMN screenshot_r2_path VARCHAR(255)")
-    if 'screenshot_r3_path' not in cols:
-        stmts.append("ALTER TABLE score_entries ADD COLUMN screenshot_r3_path VARCHAR(255)")
+    if "screenshot_r1_path" not in cols:
+        stmts.append(
+            "ALTER TABLE score_entries ADD COLUMN screenshot_r1_path VARCHAR(255)"
+        )
+    if "screenshot_r2_path" not in cols:
+        stmts.append(
+            "ALTER TABLE score_entries ADD COLUMN screenshot_r2_path VARCHAR(255)"
+        )
+    if "screenshot_r3_path" not in cols:
+        stmts.append(
+            "ALTER TABLE score_entries ADD COLUMN screenshot_r3_path VARCHAR(255)"
+        )
 
     if stmts:
         with engine.begin() as conn:
             for sql in stmts:
-                conn.exec_driver_sql(sql)   # one statement at a time (works on SQLite & Postgres)
+                conn.exec_driver_sql(
+                    sql
+                )  # one statement at a time (works on SQLite & Postgres)
+
 
 ensure_round_shot_columns()
 
 
 def ensure_se_column():
     insp = inspect(engine)
-    cols = [c['name'] for c in insp.get_columns('score_entries')]
-    if 'screenshot_path' not in cols:
+    cols = [c["name"] for c in insp.get_columns("score_entries")]
+    if "screenshot_path" not in cols:
         with engine.begin() as conn:
             try:
-                conn.execute(text("ALTER TABLE score_entries ADD COLUMN screenshot_path VARCHAR(255)"))
+                conn.execute(
+                    text("ALTER TABLE score_entries ADD COLUMN screenshot_path VARCHAR(255)")
+                )
             except Exception:
                 pass
 
+
 def cleanup_old_uploads():
+    """
+    Legacy filesystem cleanup: old /static/uploads/YYYYMMDD folders.
+    Safe to keep around for local dev or older data.
+    """
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).date()
     for p in UPLOAD_DIR.iterdir():
@@ -138,8 +203,23 @@ def cleanup_old_uploads():
                 shutil.rmtree(p, ignore_errors=True)
 
 
+def cleanup_old_images():
+    """
+    Delete images older than RETAIN_DAYS from the DB.
+    With RETAIN_DAYS=1 this keeps roughly 'today' and removes older.
+    """
+    if RETAIN_DAYS <= 0:
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETAIN_DAYS)
+    with SessionLocal() as db:
+        db.execute(delete(ImageBlob).where(ImageBlob.created_at < cutoff))
+        db.commit()
+
+
 ensure_se_column()
 cleanup_old_uploads()
+cleanup_old_images()
 
 
 # Ensure a Global board exists (stats-only)
@@ -149,6 +229,7 @@ def ensure_global_board() -> None:
         if not exists:
             db.add(Board(name="Global", slug="global", created_at=datetime.now(timezone.utc)))
             db.commit()
+
 
 ensure_global_board()
 
@@ -161,12 +242,14 @@ static_dir = ROOT / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 
+
 def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
 
 # ---------- Schemas ------------------------------------------------------------
 class SubmitEntryIn(BaseModel):
@@ -176,34 +259,46 @@ class SubmitEntryIn(BaseModel):
     round3: int = Field(..., ge=0, le=5000)
     board_slug: Optional[str] = Field(default=None)  # API only; UI uses path param
 
+
 # ---------- Utilities ----------------------------------------------------------
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+
 def start_of_today_utc(now: datetime) -> datetime:
     return datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
 
+
 def start_of_week_utc(now: datetime) -> datetime:
-    monday = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=now.weekday())
+    monday = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(
+        days=now.weekday()
+    )
     return datetime(monday.year, monday.month, monday.day, tzinfo=timezone.utc)
 
+
 def slugify(name: str) -> str:
-    import re
     s = re.sub(r"[^a-zA-Z0-9]+", "-", name.strip().lower()).strip("-")
     return s or "board"
+
 
 def current_user(request: Request, db: Session) -> Optional[Player]:
     email = request.session.get("user_email")
     if not email:
         return None
-    return db.execute(select(Player).where(func.lower(Player.email) == email.lower())).scalar_one_or_none()
+    return (
+        db.execute(select(Player).where(func.lower(Player.email) == email.lower()))
+        .scalar_one_or_none()
+    )
+
 
 def get_all_boards(db: Session) -> list[dict]:
     rows = db.execute(select(Board.id, Board.name, Board.slug).order_by(Board.name.asc())).all()
     return [{"id": r.id, "name": r.name, "slug": r.slug} for r in rows]
 
+
 def get_board_by_slug(db: Session, slug: str) -> Optional[Board]:
     return db.execute(select(Board).where(Board.slug == slug)).scalar_one_or_none()
+
 
 def ensure_unique_slug(db: Session, base_slug: str) -> str:
     slug = base_slug
@@ -212,6 +307,7 @@ def ensure_unique_slug(db: Session, base_slug: str) -> str:
         slug = f"{base_slug}-{i}"
         i += 1
     return slug
+
 
 def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
     # Build a "day" key that works on SQLite and Postgres
@@ -232,7 +328,9 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
     rows = db.execute(
         select(
             ScoreEntry.played_at,
-            ScoreEntry.round1, ScoreEntry.round2, ScoreEntry.round3,
+            ScoreEntry.round1,
+            ScoreEntry.round2,
+            ScoreEntry.round3,
             ScoreEntry.total_score,
             Board.name.label("board_name"),
             Board.slug.label("board_slug"),
@@ -245,21 +343,25 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
     out: list[dict] = []
     for r in rows:
         dt: datetime = r.played_at
-        out.append({
-            "played_at": dt,
-            "day": dt.date().isoformat(),
-            "time": dt.strftime("%H:%M"),
-            "round1": int(r.round1 or 0),
-            "round2": int(r.round2 or 0),
-            "round3": int(r.round3 or 0),
-            "total": int(r.total_score or 0),
-            "board_name": r.board_name or "—",
-            "board_slug": r.board_slug or "",
-        })
+        out.append(
+            {
+                "played_at": dt,
+                "day": dt.date().isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "round1": int(r.round1 or 0),
+                "round2": int(r.round2 or 0),
+                "round3": int(r.round3 or 0),
+                "total": int(r.total_score or 0),
+                "board_name": r.board_name or "—",
+                "board_slug": r.board_slug or "",
+            }
+        )
     return out
 
 
-def query_leaderboard(db: Session, board_id: Optional[int], period: Literal["all", "today", "week"]) -> list[dict]:
+def query_leaderboard(
+    db: Session, board_id: Optional[int], period: Literal["all", "today", "week"]
+) -> list[dict]:
     now = utcnow()
     since: Optional[datetime] = None
     if period == "today":
@@ -295,47 +397,49 @@ def query_leaderboard(db: Session, board_id: Optional[int], period: Literal["all
     day_rows = day_rows.group_by("pid", "player_name", "day_key").subquery("per_day")
 
     # 2) Aggregate per player over the selected period
-    agg = (
-        select(
-            day_rows.c.pid,
-            day_rows.c.player_name,
-            func.count().label("entries"),                                # distinct days
-            func.coalesce(func.sum(day_rows.c.day_total), 0).label("total_score"),
-            func.avg(day_rows.c.day_total).label("avg_score"),            # average per day
-            func.max(day_rows.c.r1).label("max_r1"),
-            func.max(day_rows.c.r2).label("max_r2"),
-            func.max(day_rows.c.r3).label("max_r3"),
-            func.coalesce(func.sum(day_rows.c.r1), 0).label("sum_r1"),    # used for "today" R1/2/3
-            func.coalesce(func.sum(day_rows.c.r2), 0).label("sum_r2"),
-            func.coalesce(func.sum(day_rows.c.r3), 0).label("sum_r3"),
-        )
-        .group_by(day_rows.c.pid, day_rows.c.player_name)
-        .order_by(func.sum(day_rows.c.day_total).desc())
+    agg = select(
+        day_rows.c.pid,
+        day_rows.c.player_name,
+        func.count().label("entries"),  # distinct days
+        func.coalesce(func.sum(day_rows.c.day_total), 0).label("total_score"),
+        func.avg(day_rows.c.day_total).label("avg_score"),  # average per day
+        func.max(day_rows.c.r1).label("max_r1"),
+        func.max(day_rows.c.r2).label("max_r2"),
+        func.max(day_rows.c.r3).label("max_r3"),
+        func.coalesce(func.sum(day_rows.c.r1), 0).label("sum_r1"),
+        func.coalesce(func.sum(day_rows.c.r2), 0).label("sum_r2"),
+        func.coalesce(func.sum(day_rows.c.r3), 0).label("sum_r3"),
+    ).group_by(day_rows.c.pid, day_rows.c.player_name).order_by(
+        func.sum(day_rows.c.day_total).desc()
     )
 
     rows = db.execute(agg).all()
 
     out: list[dict] = []
     for idx, r in enumerate(rows, start=1):
-        best_round = max(int(r.max_r1 or 0), int(r.max_r2 or 0), int(r.max_r3 or 0))
+        best_round = max(
+            int(r.max_r1 or 0), int(r.max_r2 or 0), int(r.max_r3 or 0)
+        )
         avg_score = float(r.avg_score or 0.0)
         avg_round = avg_score / 3.0  # for Today table
-        # inside the for-loop that builds `out.append({...})`
-        out.append({
-            "rank": idx,
-            "player_id": r.pid,  # <-- add this line
-            "player_name": r.player_name,
-            "count": int(r.entries or 0),
-            "total_score": int(r.total_score or 0),
-            "average_score": avg_score,
-            "average_round": avg_round,
-            "max_round": best_round,
-            "round1": int(r.sum_r1 or 0),
-            "round2": int(r.sum_r2 or 0),
-            "round3": int(r.sum_r3 or 0),
-        })
+        out.append(
+            {
+                "rank": idx,
+                "player_id": r.pid,
+                "player_name": r.player_name,
+                "count": int(r.entries or 0),
+                "total_score": int(r.total_score or 0),
+                "average_score": avg_score,
+                "average_round": avg_round,
+                "max_round": best_round,
+                "round1": int(r.sum_r1 or 0),
+                "round2": int(r.sum_r2 or 0),
+                "round3": int(r.sum_r3 or 0),
+            }
+        )
 
     return out
+
 
 # ---------- Routes -------------------------------------------------------------
 @app.get("/favicon.ico", include_in_schema=False)
@@ -346,9 +450,11 @@ def favicon():
         return FileResponse(ico, media_type="image/x-icon")
     return FileResponse(svg, media_type="image/svg+xml")
 
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     return RedirectResponse(url="/board/global", status_code=307)
+
 
 @app.get("/board/{slug}", response_class=HTMLResponse)
 async def board_leaderboard(slug: str, request: Request, db: Session = Depends(get_db)):
@@ -356,46 +462,69 @@ async def board_leaderboard(slug: str, request: Request, db: Session = Depends(g
     # Select board in session (for navbar Submit)
     request.session["current_board_slug"] = slug if slug != "global" else None
 
-    rows_all = query_leaderboard(db, None if slug == "global" else (board.id if board else None), "all")
-    rows_week = query_leaderboard(db, None if slug == "global" else (board.id if board else None), "week")
-    rows_today = query_leaderboard(db, None if slug == "global" else (board.id if board else None), "today")
+    rows_all = query_leaderboard(
+        db, None if slug == "global" else (board.id if board else None), "all"
+    )
+    rows_week = query_leaderboard(
+        db, None if slug == "global" else (board.id if board else None), "week"
+    )
+    rows_today = query_leaderboard(
+        db, None if slug == "global" else (board.id if board else None), "today"
+    )
 
     me = current_user(request, db)
     boards = get_all_boards(db)
-    return templates.TemplateResponse("leaderboard.html", {
-        "request": request,
-        "rows_all": rows_all,
-        "rows_week": rows_week,
-        "rows_today": rows_today,
-        "me": me,
-        "board": board,              # None means Global
-        "is_global": slug == "global",
-        "boards": boards,
-        "saved": request.query_params.get("saved") == "1",
-    })
+    return templates.TemplateResponse(
+        "leaderboard.html",
+        {
+            "request": request,
+            "rows_all": rows_all,
+            "rows_week": rows_week,
+            "rows_today": rows_today,
+            "me": me,
+            "board": board,  # None means Global
+            "is_global": slug == "global",
+            "boards": boards,
+            "saved": request.query_params.get("saved") == "1",
+        },
+    )
+
 
 @app.get("/boards", response_class=HTMLResponse)
 async def boards_page(request: Request, db: Session = Depends(get_db)):
     me = current_user(request, db)
     boards = get_all_boards(db)
-    return templates.TemplateResponse("boards.html", {"request": request, "me": me, "boards": boards})
+    return templates.TemplateResponse(
+        "boards.html", {"request": request, "me": me, "boards": boards}
+    )
+
 
 @app.post("/boards")
-async def create_board(request: Request, db: Session = Depends(get_db), name: str = Form(...)):
+async def create_board(
+    request: Request, db: Session = Depends(get_db), name: str = Form(...)
+):
     me = current_user(request, db)
     if not me:
         return RedirectResponse(url="/login?next=%2Fboards", status_code=303)
     slug = ensure_unique_slug(db, slugify(name))
-    board = Board(name=name.strip(), slug=slug, owner_player_id=me.id if me else None, created_at=utcnow())
+    board = Board(
+        name=name.strip(),
+        slug=slug,
+        owner_player_id=me.id if me else None,
+        created_at=utcnow(),
+    )
     db.add(board)
     db.commit()
     # Select that board immediately
     request.session["current_board_slug"] = slug
     return RedirectResponse(url=f"/board/{slug}", status_code=303)
 
+
 # ----- Board-scoped submit (no dropdown) --------------------------------------
 @app.get("/board/{slug}/submit", response_class=HTMLResponse)
-async def submit_form_for_board(slug: str, request: Request, db: Session = Depends(get_db)):
+async def submit_form_for_board(
+    slug: str, request: Request, db: Session = Depends(get_db)
+):
     me = current_user(request, db)
     if not me:
         return templates.TemplateResponse("login_required.html", {"request": request})
@@ -413,25 +542,27 @@ async def submit_form_for_board(slug: str, request: Request, db: Session = Depen
         select(ScoreEntry.id).where(
             ScoreEntry.player_id == me.id,
             ScoreEntry.board_id == board.id,
-            ScoreEntry.played_at >= today
+            ScoreEntry.played_at >= today,
         )
     ).first()
     if exists_here:
         # normal limit message
-        return templates.TemplateResponse("submit_board.html", {
-            "request": request, "me": me, "limit_reached": True, "board": board
-        })
+        return templates.TemplateResponse(
+            "submit_board.html",
+            {"request": request, "me": me, "limit_reached": True, "board": board},
+        )
 
     # submitted somewhere else today? -> reuse automatically
-    any_today = db.execute(
-        select(ScoreEntry)
-        .where(
-            ScoreEntry.player_id == me.id,
-            ScoreEntry.played_at >= today
+    any_today = (
+        db.execute(
+            select(ScoreEntry)
+            .where(ScoreEntry.player_id == me.id, ScoreEntry.played_at >= today)
+            .order_by(ScoreEntry.played_at.desc())
+            .limit(1)
         )
-        .order_by(ScoreEntry.played_at.desc())
-        .limit(1)
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     if any_today:
         copy = ScoreEntry(
@@ -453,9 +584,11 @@ async def submit_form_for_board(slug: str, request: Request, db: Session = Depen
         return RedirectResponse(url=f"/board/{slug}?saved=1&reused=1", status_code=303)
 
     # no entry yet today -> show form for first entry
-    return templates.TemplateResponse("submit_board.html", {
-        "request": request, "me": me, "limit_reached": False, "board": board
-    })
+    return templates.TemplateResponse(
+        "submit_board.html",
+        {"request": request, "me": me, "limit_reached": False, "board": board},
+    )
+
 
 @app.post("/board/{slug}/submit")
 async def submit_post_for_board(
@@ -469,10 +602,11 @@ async def submit_post_for_board(
     screenshot_r3: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-
     me = current_user(request, db)
     if not me:
-        return RedirectResponse(url=f"/login?next=%2Fboard%2F{slug}%2Fsubmit", status_code=303)
+        return RedirectResponse(
+            url=f"/login?next=%2Fboard%2F{slug}%2Fsubmit", status_code=303
+        )
     if slug == "global":
         return RedirectResponse(url="/board/global", status_code=303)
 
@@ -487,22 +621,23 @@ async def submit_post_for_board(
         select(ScoreEntry.id).where(
             ScoreEntry.player_id == me.id,
             ScoreEntry.board_id == board.id,
-            ScoreEntry.played_at >= today
+            ScoreEntry.played_at >= today,
         )
     ).first()
     if exists_here:
         return RedirectResponse(url=f"/board/{slug}/submit?limit=1", status_code=303)
 
     # if already submitted somewhere else today, reuse that instead of new values
-    any_today = db.execute(
-        select(ScoreEntry)
-        .where(
-            ScoreEntry.player_id == me.id,
-            ScoreEntry.played_at >= today
+    any_today = (
+        db.execute(
+            select(ScoreEntry)
+            .where(ScoreEntry.player_id == me.id, ScoreEntry.played_at >= today)
+            .order_by(ScoreEntry.played_at.desc())
+            .limit(1)
         )
-        .order_by(ScoreEntry.played_at.desc())
-        .limit(1)
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     if any_today:
         copy = ScoreEntry(
@@ -525,7 +660,9 @@ async def submit_post_for_board(
 
     # first submission of the day -> accept the form values
     try:
-        r1 = int(round1); r2 = int(round2); r3 = int(round3)
+        r1 = int(round1)
+        r2 = int(round2)
+        r3 = int(round3)
     except Exception:
         raise HTTPException(400, detail="Scores must be integers")
     if any(x < 0 or x > 5000 for x in (r1, r2, r3)):
@@ -535,7 +672,9 @@ async def submit_post_for_board(
     entry = ScoreEntry(
         player_id=me.id,
         played_at=utcnow(),
-        round1=r1, round2=r2, round3=r3,
+        round1=r1,
+        round2=r2,
+        round3=r3,
         total_score=total,
         board_id=board.id,
         screenshot_r1_path=screenshot_r1 or None,
@@ -554,16 +693,26 @@ async def submit_post_for_board(
 async def register_form(request: Request):
     return templates.TemplateResponse("register.html", {"request": request})
 
+
 @app.post("/register")
-async def register_post(request: Request, db: Session = Depends(get_db), email: str = Form(...), name: str = Form(...)):
-    email = email.strip(); name = name.strip()
+async def register_post(
+    request: Request,
+    db: Session = Depends(get_db),
+    email: str = Form(...),
+    name: str = Form(...),
+):
+    email = email.strip()
+    name = name.strip()
     if not email or "@" not in email:
         raise HTTPException(400, detail="Valid email required")
     if not name:
         raise HTTPException(400, detail="Name is required")
 
     # Try by email
-    player = db.execute(select(Player).where(func.lower(Player.email) == email.lower())).scalar_one_or_none()
+    player = (
+        db.execute(select(Player).where(func.lower(Player.email) == email.lower()))
+        .scalar_one_or_none()
+    )
     if player:
         if player.name != name:
             player.name = name
@@ -571,7 +720,10 @@ async def register_post(request: Request, db: Session = Depends(get_db), email: 
             db.commit()
     else:
         # Reuse by name if legacy UNIQUE(name) existed in older DBs
-        by_name = db.execute(select(Player).where(func.lower(Player.name) == name.lower())).scalar_one_or_none()
+        by_name = (
+            db.execute(select(Player).where(func.lower(Player.name) == name.lower()))
+            .scalar_one_or_none()
+        )
         if by_name:
             by_name.email = email
             db.add(by_name)
@@ -584,7 +736,12 @@ async def register_post(request: Request, db: Session = Depends(get_db), email: 
                 db.commit()
             except IntegrityError:
                 db.rollback()
-                existing = db.execute(select(Player).where(func.lower(Player.name) == name.lower())).scalar_one_or_none()
+                existing = (
+                    db.execute(
+                        select(Player).where(func.lower(Player.name) == name.lower())
+                    )
+                    .scalar_one_or_none()
+                )
                 if existing:
                     existing.email = email
                     db.add(existing)
@@ -597,14 +754,21 @@ async def register_post(request: Request, db: Session = Depends(get_db), email: 
     request.session["user_name"] = player.name
     return RedirectResponse(url="/board/global", status_code=303)
 
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_form(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+
 @app.post("/login")
-async def login_post(request: Request, db: Session = Depends(get_db), email: str = Form(...)):
+async def login_post(
+    request: Request, db: Session = Depends(get_db), email: str = Form(...)
+):
     email = email.strip()
-    player = db.execute(select(Player).where(func.lower(Player.email) == email.lower())).scalar_one_or_none()
+    player = (
+        db.execute(select(Player).where(func.lower(Player.email) == email.lower()))
+        .scalar_one_or_none()
+    )
     if not player:
         return RedirectResponse(url=f"/register?email={email}", status_code=303)
     request.session["user_email"] = email
@@ -612,14 +776,20 @@ async def login_post(request: Request, db: Session = Depends(get_db), email: str
     next_url = request.query_params.get("next") or "/board/global"
     return RedirectResponse(url=next_url, status_code=303)
 
+
 @app.get("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/board/global", status_code=303)
 
+
 # ---------- API ----------------------------------------------------------------
 @app.get("/api/leaderboard")
-async def api_leaderboard(period: Literal["all", "today", "week"] = "all", board_slug: str = "global", db: Session = Depends(get_db)):
+async def api_leaderboard(
+    period: Literal["all", "today", "week"] = "all",
+    board_slug: str = "global",
+    db: Session = Depends(get_db),
+):
     if board_slug == "global":
         return query_leaderboard(db, None, period)
     board = get_board_by_slug(db, board_slug)
@@ -627,17 +797,27 @@ async def api_leaderboard(period: Literal["all", "today", "week"] = "all", board
         raise HTTPException(404, "Board not found")
     return query_leaderboard(db, board.id, period)
 
+
 @app.post("/api/submit_entry")
 async def api_submit_entry(payload: SubmitEntryIn, db: Session = Depends(get_db)):
     """API still accepts board_slug, but rejects 'global'."""
-    player = db.execute(select(Player).where(func.lower(Player.name) == payload.player_name.lower())).scalar_one_or_none()
+    player = (
+        db.execute(
+            select(Player).where(func.lower(Player.name) == payload.player_name.lower())
+        )
+        .scalar_one_or_none()
+    )
     if not player:
         player = Player(name=payload.player_name)
         db.add(player)
         db.flush()
 
     today = start_of_today_utc(utcnow())
-    exists = db.execute(select(ScoreEntry.id).where(ScoreEntry.player_id == player.id, ScoreEntry.played_at >= today)).first()
+    exists = db.execute(
+        select(ScoreEntry.id).where(
+            ScoreEntry.player_id == player.id, ScoreEntry.played_at >= today
+        )
+    ).first()
     if exists:
         raise HTTPException(409, detail="Already submitted today")
 
@@ -656,15 +836,17 @@ async def api_submit_entry(payload: SubmitEntryIn, db: Session = Depends(get_db)
         round2=int(payload.round2),
         round3=int(payload.round3),
         total_score=total,
-        board_id=board.id
+        board_id=board.id,
     )
     db.add(entry)
     db.commit()
     return {"ok": True, "entry_id": entry.id, "total": total}
 
+
 @app.get("/health")
 async def health():
     return {"ok": True, "time": utcnow().isoformat()}
+
 
 @app.get("/me", response_class=HTMLResponse)
 async def my_stats(request: Request, db: Session = Depends(get_db)):
@@ -672,9 +854,11 @@ async def my_stats(request: Request, db: Session = Depends(get_db)):
     if not me:
         return templates.TemplateResponse("login_required.html", {"request": request})
     entries = fetch_player_entries(db, me.id)
-    return templates.TemplateResponse("user_history.html", {
-        "request": request, "me": me, "player": me, "entries": entries
-    })
+    return templates.TemplateResponse(
+        "user_history.html",
+        {"request": request, "me": me, "player": me, "entries": entries},
+    )
+
 
 @app.get("/player/{player_id}", response_class=HTMLResponse)
 async def player_stats(player_id: int, request: Request, db: Session = Depends(get_db)):
@@ -683,9 +867,11 @@ async def player_stats(player_id: int, request: Request, db: Session = Depends(g
         raise HTTPException(404, "Player not found")
     entries = fetch_player_entries(db, player.id)
     me = current_user(request, db)
-    return templates.TemplateResponse("user_history.html", {
-        "request": request, "me": me, "player": player, "entries": entries
-    })
+    return templates.TemplateResponse(
+        "user_history.html",
+        {"request": request, "me": me, "player": player, "entries": entries},
+    )
+
 
 @app.get("/boards/new", response_class=HTMLResponse)
 async def new_board_form(request: Request, db: Session = Depends(get_db)):
@@ -695,10 +881,12 @@ async def new_board_form(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login?next=%2Fboards%2Fnew", status_code=303)
     return templates.TemplateResponse("board_new.html", {"request": request, "me": me})
 
+
 @app.post("/api/paste_image")
-async def paste_image(request: Request):
-    # Purge old upload folders first (keeps only today if RETAIN_DAYS=1)
+async def paste_image(request: Request, db: Session = Depends(get_db)):
+    # Purge old images first (DB + any legacy folders)
     cleanup_old_uploads()
+    cleanup_old_images()
 
     form = await request.form()
     f: UploadFile | None = form.get("image")  # JS sends Clipboard image here
@@ -713,22 +901,32 @@ async def paste_image(request: Request):
     if len(data) > 5 * 1024 * 1024:
         raise HTTPException(413, "Image too large (max 5 MB)")
 
-    day_dir = UPLOAD_DIR / datetime.now(timezone.utc).strftime("%Y%m%d")
-    day_dir.mkdir(parents=True, exist_ok=True)
-    ext = ".png" if "png" in ctype else (".jpg" if "jpeg" in ctype else ".webp")
-    name = f"{uuid.uuid4().hex}{ext}"
-    path = day_dir / name
-    with open(path, "wb") as out:
-        out.write(data)
+    # Store image bytes in DB
+    image_id = uuid.uuid4().hex  # 32-char hex string
+    img = ImageBlob(id=image_id, mime_type=ctype, data=data)
+    db.add(img)
+    db.commit()
 
-    url = f"/static/uploads/{day_dir.name}/{name}"
+    # The returned "url" is used by the frontend as screenshot_*_path
+    url = f"/images/{image_id}"
     return {"ok": True, "url": url}
+
+
+@app.get("/images/{image_id}")
+async def get_image(image_id: str, db: Session = Depends(get_db)):
+    img = db.get(ImageBlob, image_id)
+    if not img:
+        raise HTTPException(404, "Image not found")
+    return Response(content=img.data, media_type=img.mime_type)
+
 
 @app.get("/board/{slug}/today", response_class=HTMLResponse)
 async def todays_round(slug: str, request: Request, db: Session = Depends(get_db)):
     me = current_user(request, db)
     if not me:
-        return RedirectResponse(url="/login?next=%2Fboard%2F" + slug + "%2Ftoday", status_code=303)
+        return RedirectResponse(
+            url="/login?next=%2Fboard%2F" + slug + "%2Ftoday", status_code=303
+        )
 
     if slug == "global":
         raise HTTPException(404, "Pick a specific board.")
@@ -744,18 +942,20 @@ async def todays_round(slug: str, request: Request, db: Session = Depends(get_db
         select(ScoreEntry.id).where(
             ScoreEntry.player_id == me.id,
             ScoreEntry.board_id == board.id,
-            ScoreEntry.played_at >= today
+            ScoreEntry.played_at >= today,
         )
     ).first()
     if not allowed:
-        return templates.TemplateResponse("today_locked.html", {
-            "request": request, "me": me, "board": board
-        })
+        return templates.TemplateResponse(
+            "today_locked.html", {"request": request, "me": me, "board": board}
+        )
 
     rows = db.execute(
         select(
             Player.name,
-            ScoreEntry.round1, ScoreEntry.round2, ScoreEntry.round3,
+            ScoreEntry.round1,
+            ScoreEntry.round2,
+            ScoreEntry.round3,
             ScoreEntry.total_score,
             ScoreEntry.screenshot_r1_path.label("shot1"),
             ScoreEntry.screenshot_r2_path.label("shot2"),
@@ -768,20 +968,26 @@ async def todays_round(slug: str, request: Request, db: Session = Depends(get_db
         .order_by(ScoreEntry.total_score.desc())
     ).all()
 
-    posts = [{
-        "name": r.name,
-        "r1": int(r.round1), "r2": int(r.round2), "r3": int(r.round3),
-        "total": int(r.total_score),
-        "img1": r.shot1 or r.legacy_shot,
-        "img2": r.shot2,
-        "img3": r.shot3,
-        "time": r.played_at.strftime("%H:%M"),
-    } for r in rows]
+    posts = [
+        {
+            "name": r.name,
+            "r1": int(r.round1),
+            "r2": int(r.round2),
+            "r3": int(r.round3),
+            "total": int(r.total_score),
+            "img1": r.shot1 or r.legacy_shot,
+            "img2": r.shot2,
+            "img3": r.shot3,
+            "time": r.played_at.strftime("%H:%M"),
+        }
+        for r in rows
+    ]
 
     return templates.TemplateResponse(
         "today_round.html",
-        {"request": request, "me": me, "board": board, "posts": posts, "is_global": False}
+        {"request": request, "me": me, "board": board, "posts": posts, "is_global": False},
     )
+
 
 @app.get("/privacy/extension", response_class=HTMLResponse)
 async def extension_privacy(request: Request):
