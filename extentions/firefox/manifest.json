@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "GeoLead ⇄ GeoGuessr Bridge",
+  "version": "0.2.3",
+  "description": "Bridges GeoGuessr daily game results into GeoLead boards.",
+
+  "permissions": [
+    "storage",
+    "webRequest"
+  ],
+
+  "host_permissions": [
+    "https://www.geoguessr.com/*",
+    "http://127.0.0.1:8000/*",
+    "https://geolead.fun/*"
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://www.geoguessr.com/*"],
+      "js": ["geoguessr_content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://127.0.0.1:8000/board/*/submit*",
+        "https://geolead.fun/board/*/submit*"
+      ],
+      "js": ["geolead_content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "geolead-bridge@example.com",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "websiteActivity",
+          "websiteContent"
+        ]
+      }
+    }
+  }
+}
