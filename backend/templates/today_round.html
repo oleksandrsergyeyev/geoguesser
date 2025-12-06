@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block title %}Today’s round · {{ board.name }}{% endblock %}
 
 {% block extra_head %}
   <!-- Leaflet CSS (for maps) -->
@@ -12,20 +13,48 @@
 
 {% block content %}
 
-  <h1>Today’s round · {{ board.name }}</h1>
+  <h1>
+    Today’s round ·
+    <a href="/board/{{ board.slug }}">{{ board.name }}</a>
+  </h1>
 
   {% if posts|length == 0 %}
     <p class="muted">No posts yet for today.</p>
   {% else %}
+
+    {# ---------- 1. Aggregated maps: one per round, all players ---------- #}
+    <section class="round-maps-shell">
+      <div class="card round-maps-card">
+        <h2 style="margin-top:4px;">Maps for today’s round</h2>
+
+        <div class="round-maps-grid">
+          <div class="round-map-wrapper">
+            <div class="round-head">Round 1</div>
+            <div id="round-map-1" class="round-map"></div>
+          </div>
+          <div class="round-map-wrapper">
+            <div class="round-head">Round 2</div>
+            <div id="round-map-2" class="round-map"></div>
+          </div>
+          <div class="round-map-wrapper">
+            <div class="round-head">Round 3</div>
+            <div id="round-map-3" class="round-map"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {# ---------- 2. Per-player list + screenshots ---------- #}
     <div class="posts">
       {% for p in posts %}
-        {% set player_idx = loop.index0 %}
         <article class="card post">
           <header class="post-header">
             <div class="post-title">
               <span class="player">{{ p.name }}</span>
               <span class="meta">
-                R1 {{ p.r1 }} · R2 {{ p.r2 }} · R3 {{ p.r3 }} ·
+                R1 {{ p.r1 }} ·
+                R2 {{ p.r2 }} ·
+                R3 {{ p.r3 }} ·
                 <strong>Total {{ "{:,}".format(p.total) }}</strong>
                 {% if p.total_distance_km is not none %}
                   · {{ (p.total_distance_km)|round(1) }} km
@@ -37,14 +66,7 @@
 
           <div class="rounds">
             {% for r in p.rounds %}
-              <div class="round"
-                   data-player-index="{{ player_idx }}"
-                   data-round-index="{{ r.index }}"
-                   data-has-map="{{ '1' if r.has_map else '0' }}"
-                   data-guess-lat="{{ r.guess_lat if r.guess_lat is not none else '' }}"
-                   data-guess-lng="{{ r.guess_lng if r.guess_lng is not none else '' }}"
-                   data-target-lat="{{ r.target_lat if r.target_lat is not none else '' }}"
-                   data-target-lng="{{ r.target_lng if r.target_lng is not none else '' }}">
+              <div class="round">
                 <div class="round-head">
                   R{{ r.index }}
                   {% if r.distance_m %}
@@ -55,23 +77,18 @@
                   {% endif %}
                 </div>
 
-                {% if r.has_map %}
-                  <!-- Imported GeoGuessr game: show map -->
-                  <div class="round-map" id="map-{{ player_idx }}-{{ r.index }}"></div>
-
-                {% elif r.has_screenshot and r.screenshot_url %}
-                  <!-- Manual entry: show screenshot -->
-                  <img
-                    class="shot"
-                    src="{{ r.screenshot_url }}"
-                    alt="Round {{ r.index }} screenshot for {{ p.name }}"
-                    data-fullsrc="{{ r.screenshot_url }}"
-                    data-caption="{{ p.name }} – Round {{ r.index }}{% if r.score %} · {{ r.score }} pts{% endif %}{% if r.distance_m %} · {{ (r.distance_m / 1000.0)|round(1) }} km{% endif %}"
-                  />
-
+                {% if r.screenshot_url %}
+                  <div class="shot">
+                    <img
+                      src="{{ r.screenshot_url }}"
+                      alt="Screenshot round {{ r.index }} for {{ p.name }}"
+                      style="display:block; width:100%; height:auto;"
+                    />
+                  </div>
                 {% else %}
-                  <!-- No map and no screenshot -->
-                  <div class="shot shot-empty">No map or screenshot</div>
+                  <div class="shot shot-empty">
+                    No screenshot
+                  </div>
                 {% endif %}
               </div>
             {% endfor %}
@@ -81,14 +98,7 @@
     </div>
   {% endif %}
 
-  <!-- Screenshot lightbox markup -->
-  <div class="image-lightbox" id="image-lightbox">
-    <span class="image-lightbox-close" id="image-lightbox-close">&times;</span>
-    <img id="image-lightbox-img" src="" alt="Screenshot" />
-    <div class="image-lightbox-caption" id="image-lightbox-caption"></div>
-  </div>
-
-  <!-- Leaflet JS + map renderer -->
+  <!-- Leaflet JS + renderer for aggregated maps -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-o8UgE19ES3QnE/kV1l1obTNT5hzuC1Lpp3CqkMk8W+8="
@@ -96,102 +106,128 @@
   ></script>
 
   <script>
-    // Maps for imported GeoGuessr games
     document.addEventListener('DOMContentLoaded', () => {
       if (typeof L === 'undefined') {
         console.warn('Leaflet not loaded');
         return;
       }
 
-      const maps = document.querySelectorAll('.round-map');
-      maps.forEach((el) => {
-        const round = el.closest('.round');
-        if (!round) return;
-        if (round.dataset.hasMap !== '1') return;
+      // round -> array of player/coords
+      const roundData = { 1: [], 2: [], 3: [] };
 
-        const gLat = parseFloat(round.dataset.guessLat);
-        const gLng = parseFloat(round.dataset.guessLng);
-        const tLat = parseFloat(round.dataset.targetLat);
-        const tLng = parseFloat(round.dataset.targetLng);
+      {% for p in posts %}
+        {% for r in p.rounds %}
+          {% if r.has_map
+                and r.guess_lat is not none and r.guess_lng is not none
+                and r.target_lat is not none and r.target_lng is not none %}
+            if (!roundData[{{ r.index }}]) {
+              roundData[{{ r.index }}] = [];
+            }
+            roundData[{{ r.index }}].push({
+              playerName: "{{ (p.name or '')|replace('\\', '\\\\')|replace('\"', '\\\"') }}",
+              guessLat: {{ r.guess_lat }},
+              guessLng: {{ r.guess_lng }},
+              targetLat: {{ r.target_lat }},
+              targetLng: {{ r.target_lng }}
+            });
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
 
-        if (
-          Number.isNaN(gLat) || Number.isNaN(gLng) ||
-          Number.isNaN(tLat) || Number.isNaN(tLng)
-        ) {
+      // ---------- Marker HTML builders (icon + label underneath) ----------
+
+      function makeTargetHtml() {
+        return `
+          <div class="geo-marker geo-marker-target">
+            <div class="geo-marker-icon">🎯</div>
+            <div class="geo-marker-label">TARGET</div>
+          </div>
+        `;
+      }
+
+      function makePlayerHtml(name) {
+        let label = (typeof name === 'string' ? name : '') || 'Player';
+        label = label.trim();
+        if (label.length > 18) {
+          label = label.slice(0, 15) + '…';
+        }
+        const safe = label
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+
+        return `
+          <div class="geo-marker geo-marker-player">
+            <div class="geo-marker-icon">👤</div>
+            <div class="geo-marker-label">${safe}</div>
+          </div>
+        `;
+      }
+
+      const configs = [
+        { round: 1, elId: 'round-map-1' },
+        { round: 2, elId: 'round-map-2' },
+        { round: 3, elId: 'round-map-3' }
+      ];
+
+      configs.forEach(cfg => {
+        const entries = roundData[cfg.round] || [];
+        const el = document.getElementById(cfg.elId);
+        if (!el) return;
+
+        if (!entries.length) {
+          el.innerHTML =
+            '<div class="round-map-empty-text">No map data for this round yet.</div>';
           return;
         }
 
         const map = L.map(el, {
           attributionControl: false,
-          zoomControl: false,
+          zoomControl: false
         });
-
-        const guess = [gLat, gLng];
-        const target = [tLat, tLng];
-        const bounds = L.latLngBounds([guess, target]);
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 18,
+          maxZoom: 18
         }).addTo(map);
 
-        L.circleMarker(guess, {
-          radius: 6,
-          color: '#4ade80',
-          fillColor: '#4ade80',
-          fillOpacity: 0.9,
+        const bounds = L.latLngBounds([]);
+
+        // Target (first entry defines target for the round)
+        const first = entries[0];
+        const targetLatLng = [first.targetLat, first.targetLng];
+        L.marker(targetLatLng, {
+          icon: L.divIcon({
+            className: 'leaflet-div-icon',
+            html: makeTargetHtml(),
+            iconSize: null
+          })
         }).addTo(map);
+        bounds.extend(targetLatLng);
 
-        L.circleMarker(target, {
-          radius: 6,
-          color: '#f87171',
-          fillColor: '#f87171',
-          fillOpacity: 0.9,
-        }).addTo(map);
+        // Each player's guess
+        entries.forEach(e => {
+          const guessLatLng = [e.guessLat, e.guessLng];
 
-        L.polyline([guess, target], {
-          weight: 2,
-          color: '#e5e7eb',
-        }).addTo(map);
+          L.marker(guessLatLng, {
+            icon: L.divIcon({
+              className: 'leaflet-div-icon',
+              html: makePlayerHtml(e.playerName),
+              iconSize: null
+            })
+          }).addTo(map);
 
-        map.fitBounds(bounds.pad(0.4));
-      });
-    });
+          L.polyline([guessLatLng, targetLatLng], {
+            weight: 1,
+            color: '#e5e7eb',
+            opacity: 0.7
+          }).addTo(map);
 
-    // Lightbox for screenshots
-    document.addEventListener('DOMContentLoaded', () => {
-      const lightbox = document.getElementById('image-lightbox');
-      const imgEl = document.getElementById('image-lightbox-img');
-      const captionEl = document.getElementById('image-lightbox-caption');
-      const closeEl = document.getElementById('image-lightbox-close');
-
-      if (!lightbox || !imgEl || !captionEl || !closeEl) return;
-
-      function closeLightbox() {
-        lightbox.classList.remove('open');
-        imgEl.src = '';
-        captionEl.textContent = '';
-      }
-
-      closeEl.addEventListener('click', closeLightbox);
-      lightbox.addEventListener('click', (e) => {
-        if (e.target === lightbox) {
-          closeLightbox();
-        }
-      });
-      document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-          closeLightbox();
-        }
-      });
-
-      document.querySelectorAll('.shot[data-fullsrc]').forEach((img) => {
-        img.addEventListener('click', () => {
-          const src = img.dataset.fullsrc || img.src;
-          const caption = img.dataset.caption || '';
-          imgEl.src = src;
-          captionEl.textContent = caption;
-          lightbox.classList.add('open');
+          bounds.extend(guessLatLng);
         });
+
+        if (bounds.isValid()) {
+          map.fitBounds(bounds.pad(0.4));
+        }
       });
     });
   </script>
