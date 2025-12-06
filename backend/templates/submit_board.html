@@ -13,52 +13,102 @@
     </div>
   {% else %}
 
-    <!-- 1) Extension import (recommended) -->
-    <div class="card" style="max-width:960px; margin-bottom:18px;">
-      <h2 style="margin-top:0;">Import today’s game (recommended)</h2>
-      <p>
-        Scores can be imported automatically from GeoGuessr using the
-        <strong>GeoLead ⇄ GeoGuessr</strong> browser extension.
-      </p>
+    <!-- 1) Extension import (recommended) – split into two cards -->
+    <div
+      class="cards cards-2"
+      style="
+        max-width:960px;
+        margin-bottom:18px;
+        grid-template-columns: 2fr 1fr;  /* 70% / 30% split */
+        align-items: stretch;
+      "
+    >
+      <!-- Left: how to import -->
+      <div class="card">
+        <h2 style="margin-top:0;">Import today’s game (recommended)</h2>
+        <p>
+          Recommended: use the <strong>GeoLead ⇄ GeoGuessr</strong> browser extension to import today’s
+          daily game automatically. If you don’t have it yet, you can still submit everything manually below.
+        </p>
 
-      <ol class="list" style="margin-top:8px; padding-left:20px;">
-        <li>
-          Play today’s daily game on
-          <a href="https://www.geoguessr.com" target="_blank" rel="noreferrer">
-            geoguessr.com
-          </a>.
-          On the final results screen, <strong>click the green “Finish game” button</strong>.
-        </li>
-        <li>
-          Come back to this page:
-          <code>/board/{{ board.slug }}/submit</code>.
-        </li>
-        <li>
-          Click
-          <button id="geolead-import-btn" type="button" class="btn small">
+        <ol class="list" style="margin-top:8px; padding-left:20px;">
+          <li>
+            Play today’s daily game on
+            <a href="https://www.geoguessr.com" target="_blank" rel="noreferrer">
+              geoguessr.com
+            </a>.
+            On the final results screen, <strong>click the green “Finish game” button</strong>.
+          </li>
+          <li>
+            Come back to this page:
+            <code>/board/{{ board.slug }}/submit</code>.
+          </li>
+          <li>
+            Click the button below to import today’s game results into this board.
+          </li>
+        </ol>
+
+        <!-- Big primary import button -->
+        <div style="margin-top:18px;">
+          <button
+            id="geolead-import-btn"
+            type="button"
+            class="btn"
+            style="
+              padding: 14px 28px;
+              font-size: 16px;
+              font-weight: 700;
+              border-radius: 999px;
+            "
+          >
             Import today’s game results
           </button>
-          — the extension will send today’s scores and distances for each round.
-        </li>
-      </ol>
+        </div>
 
-      <p class="muted" style="margin-top:10px;">
-        After import you will be redirected to the <strong>Today’s round</strong> view
-        for this board where you can see the map and distances for each round.
-      </p>
+        <p class="muted" style="margin-top:16px;">
+          After import you will be redirected to the <strong>Today’s round</strong> view
+          for this board where you can see the map and distances for each round.
+        </p>
+        <p class="muted" style="margin-top:8px;">
+          If the import doesn’t work or the button does nothing, you can always use the manual
+          submission form below.
+        </p>
+      </div>
 
-      <p class="muted" style="margin-top:8px;">
-        Don’t have the browser extension yet?
-        <a
-          id="geolead-ext-install-link"
-          class="btn small"
-          href="/extensions"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Install the browser extension
-        </a>
-      </p>
+      <!-- Right: install extension call-to-action -->
+      <div class="card" style="background:#071b11; border-color:#14532d;">
+        <h2 style="margin-top:0;">Don’t have the extension?</h2>
+        <p>
+          Install the <strong>GeoLead ⇄ GeoGuessr Bridge</strong> extension for your browser, then
+          run today’s daily game and use the import button on this page.
+        </p>
+
+        <p style="margin-top:12px;">
+          <a
+            id="geolead-ext-install-link"
+            class="btn"
+            href="/extensions"
+            target="_blank"
+            rel="noreferrer"
+            style="
+              display:block;
+              width:100%;
+              text-align:center;
+              background:#22c55e;
+              color:#061016;
+              font-weight:600;
+            "
+          >
+            Install the browser extension
+          </a>
+        </p>
+
+        <ul class="list" style="margin-top:10px; padding-left:18px; font-size:13px; color:var(--muted);">
+          <li>Available for Chrome, Edge and Firefox.</li>
+          <li>After installing, come back to this tab and click <strong>Import today’s game results</strong>.</li>
+          <li>If anything fails, you can always submit manually below.</li>
+        </ul>
+      </div>
     </div>
 
     <!-- 2) Manual submission – 3-column layout like the old design -->
