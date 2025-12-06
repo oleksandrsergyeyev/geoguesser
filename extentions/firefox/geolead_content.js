@@ -92,7 +92,7 @@
         return roundPayload;
       });
 
-      // --- FIX: ensure player_name is ALWAYS a non-empty string ---
+      // Ensure player_name is ALWAYS a non-empty string
       let rawNick =
         data.user && typeof data.user.nick === "string"
           ? data.user.nick
@@ -111,7 +111,6 @@
 
       const playerName = rawNick;
       log("Using player_name:", playerName);
-      // ------------------------------------------------------------
 
       const totalDistance = (data.rounds || []).reduce((acc, r) => {
         const d = typeof r.distance_m === "number" ? r.distance_m : 0;
@@ -133,8 +132,31 @@
 
       log("Final payload to /api/geoguessr/import:", body);
 
+      // ---- IMPORTANT: build absolute URL so Firefox is happy ----
+      let apiUrl;
       try {
-        const resp = await fetch("/api/geoguessr/import", {
+        apiUrl = new URL(
+          "/api/geoguessr/import",
+          window.location.origin
+        ).toString();
+      } catch (e) {
+        console.error(
+          EXT_LOG_PREFIX,
+          "Failed to build API URL from origin",
+          window.location.origin,
+          e
+        );
+        showAlert(
+          "GeoLead Bridge:\nCould not build API URL on this page."
+        );
+        return;
+      }
+
+      log("Resolved API URL:", apiUrl);
+      // -----------------------------------------------------------
+
+      try {
+        const resp = await window.fetch(apiUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
@@ -221,6 +243,7 @@
     );
   }
 
+  // Run on page load
   if (
     document.readyState === "complete" ||
     document.readyState === "interactive"
