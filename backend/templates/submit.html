@@ -1,36 +1,538 @@
-
 {% extends "base.html" %}
+{% block title %}Submit · {{ board.name }}{% endblock %}
+
 {% block content %}
-  <h1>Submit score</h1>
-  <p class="muted">Submitting as <strong>{{ me.name }}</strong></p>
+  <h1>Submit to {{ board.name }}</h1>
 
-  {% if limit_reached or request.query_params.get('limit') %}
-  <div class="flash warn">You've already submitted today. Try again tomorrow. ✋</div>
-  {% else %}
-  <form class="form" method="post" action="/submit">
-    <label>Board
-      <select name="board_slug" required>
-        {% for b in boards %}
-          <option value="{{ b.slug }}" {% if b.slug == (last_board or 'global') %}selected{% endif %}>{{ b.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Score - Round 1
-      <input type="number" name="round1" min="0" max="5000" required />
-    </label>
-    <label>Score - Round 2
-      <input type="number" name="round2" min="0" max="5000" required />
-    </label>
-    <label>Score - Round 3
-      <input type="number" name="round3" min="0" max="5000" required />
-    </label>
-
-    <p class="hint">Total and date are added automatically.</p>
-
-    <div class="actions">
-      <button class="btn" type="submit">Save</button>
-      <a class="btn ghost" href="/board/global">Cancel</a>
+  {% if limit_reached %}
+    <div class="card" style="max-width:960px;">
+      <p>You’ve already submitted today for this board. Try another board, or come back tomorrow. ✋</p>
+      <p style="margin-top:10px;">
+        <a class="btn" href="/board/{{ board.slug }}">Back to board</a>
+      </p>
     </div>
-  </form>
+  {% else %}
+
+    <!-- 1) Extension import (recommended) – 70/30 split -->
+    <div
+      class="cards cards-2"
+      style="
+        max-width:960px;
+        margin-bottom:18px;
+        grid-template-columns: 2fr 1fr;
+        align-items: stretch;
+      "
+    >
+      <!-- Left: how to import -->
+      <div class="card">
+        <h2 style="margin-top:0;">Import today’s game (recommended)</h2>
+        <p>
+          Recommended: use the <strong>GeoLead ⇄ GeoGuessr</strong> browser extension to import today’s
+          daily game automatically. If you don’t have it yet, you can still submit everything manually below.
+        </p>
+
+        <ol class="list" style="margin-top:8px; padding-left:20px;">
+          <li>
+            Play today’s daily game on
+            <a href="https://www.geoguessr.com" target="_blank" rel="noreferrer">
+              geoguessr.com
+            </a>.
+            On the final results screen, <strong>click the green “Finish game” button</strong>.
+          </li>
+          <li>
+            Come back to this page:
+            <code>/board/{{ board.slug }}/submit</code>.
+          </li>
+          <li>
+            Click the button below to import today’s game results into this board.
+          </li>
+        </ol>
+
+        <!-- Big primary import button -->
+        <div style="margin-top:18px;">
+          <button
+            id="geolead-import-btn"
+            type="button"
+            class="btn"
+            style="
+              padding: 14px 28px;
+              font-size: 16px;
+              font-weight: 700;
+              border-radius: 999px;
+            "
+          >
+            Import today’s game results
+          </button>
+        </div>
+
+        <p class="muted" style="margin-top:16px;">
+          After import you will be redirected to the <strong>Today’s round</strong> view
+          for this board where you can see the map and distances for each round.
+        </p>
+        <p class="muted" style="margin-top:8px;">
+          If the import doesn’t work or the button does nothing, you can always use the manual
+          submission form below.
+        </p>
+      </div>
+
+      <!-- Right: install extension call-to-action -->
+      <div class="card" style="background:#071b11; border-color:#14532d;">
+        <h2 style="margin-top:0;">Don’t have the extension?</h2>
+        <p>
+          Install the <strong>GeoLead ⇄ GeoGuessr Bridge</strong> extension for your browser, then
+          run today’s daily game and use the import button on this page.
+        </p>
+
+        <p style="margin-top:12px;">
+          <a
+            id="geolead-ext-install-link"
+            class="btn"
+            href="/extensions"
+            target="_blank"
+            rel="noreferrer"
+            style="
+              display:block;
+              width:100%;
+              text-align:center;
+              background:#22c55e;
+              color:#061016;
+              font-weight:600;
+            "
+          >
+            Install the browser extension
+          </a>
+        </p>
+
+        <ul class="list" style="margin-top:10px; padding-left:18px; font-size:13px; color:var(--muted);">
+          <li>Available for Chrome, Edge and Firefox.</li>
+          <li>After installing, come back to this tab and click <strong>Import today’s game results</strong>.</li>
+          <li>If anything fails, you can always submit manually below.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 2) Manual submission – 3-column layout -->
+    <div class="card" style="max-width:960px;">
+      <h2 style="margin-top:0;">Submit manually</h2>
+      <p>
+        If the extension doesn’t work, you can submit exactly as before:
+        enter your scores for each round and paste screenshots.
+      </p>
+
+      <style>
+        .score-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 16px;
+          margin-top: 16px;
+        }
+        .score-col label {
+          display: block;
+          margin-bottom: 6px;
+          font-weight: 600;
+          color: var(--text);
+        }
+        .score-input {
+          background: #0f1116;
+          color: var(--text);
+          border: 1px solid #2b2e35;
+          border-radius: 8px;
+          padding: 10px 12px;
+          width: 100%;
+        }
+        .score-input:focus {
+          outline: none;
+          border-color: var(--accent);
+        }
+      </style>
+
+      <form
+        id="geolead-manual-form"
+        method="post"
+        action="/board/{{ board.slug }}/submit"
+        autocomplete="off"
+      >
+        <div class="score-grid">
+          <div class="score-col">
+            <label for="geolead-score-r1">Round 1</label>
+            <input
+              id="geolead-score-r1"
+              type="number"
+              name="round1"
+              min="0"
+              max="5000"
+              required
+              inputmode="numeric"
+              class="score-input"
+            />
+          </div>
+          <div class="score-col">
+            <label for="geolead-score-r2">Round 2</label>
+            <input
+              id="geolead-score-r2"
+              type="number"
+              name="round2"
+              min="0"
+              max="5000"
+              required
+              inputmode="numeric"
+              class="score-input"
+            />
+          </div>
+          <div class="score-col">
+            <label for="geolead-score-r3">Round 3</label>
+            <input
+              id="geolead-score-r3"
+              type="number"
+              name="round3"
+              min="0"
+              max="5000"
+              required
+              inputmode="numeric"
+              class="score-input"
+            />
+          </div>
+        </div>
+
+        <span id="geolead-total-score" style="display:none;">0</span>
+
+        <input type="hidden" name="screenshot_r1" id="geolead-shot-r1" />
+        <input type="hidden" name="screenshot_r2" id="geolead-shot-r2" />
+        <input type="hidden" name="screenshot_r3" id="geolead-shot-r3" />
+
+        <div class="paste-grid grid-3" style="margin-top:24px;">
+          <div class="paste-wrap">
+            <div
+              id="geolead-paste-box-r1"
+              class="paste-box"
+              tabindex="0"
+            >
+              <div class="hint">
+                <div style="font-weight:600; margin-bottom:4px;">
+                  Screenshot — Round 1
+                </div>
+                Click and press <strong>Ctrl/⌘+V</strong>
+              </div>
+              <img
+                id="geolead-shot-img-r1"
+                alt="Round 1 screenshot"
+                style="display:none;"
+              />
+            </div>
+          </div>
+
+          <div class="paste-wrap">
+            <div
+              id="geolead-paste-box-r2"
+              class="paste-box"
+              tabindex="0"
+            >
+              <div class="hint">
+                <div style="font-weight:600; margin-bottom:4px;">
+                  Screenshot — Round 2
+                </div>
+                Click and press <strong>Ctrl/⌘+V</strong>
+              </div>
+              <img
+                id="geolead-shot-img-r2"
+                alt="Round 2 screenshot"
+                style="display:none;"
+              />
+            </div>
+          </div>
+
+          <div class="paste-wrap">
+            <div
+              id="geolead-paste-box-r3"
+              class="paste-box"
+              tabindex="0"
+            >
+              <div class="hint">
+                <div style="font-weight:600; margin-bottom:4px;">
+                  Screenshot — Round 3
+                </div>
+                Click and press <strong>Ctrl/⌘+V</strong>
+              </div>
+              <img
+                id="geolead-shot-img-r3"
+                alt="Round 3 screenshot"
+                style="display:none;"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;">
+          <button type="submit" class="btn">
+            Submit
+          </button>
+          <a href="/board/{{ board.slug }}" class="btn ghost small" style="margin-left:8px;">
+            Cancel
+          </a>
+        </div>
+      </form>
+    </div>
+
+    <p class="muted" style="margin-top:12px; max-width:960px;">
+      After submitting, you can view everyone’s results and screenshots on
+      <a href="/board/{{ board.slug }}/today">Today’s round</a>.
+    </p>
+
+    <!-- 3) Extension install link auto-detection -->
+    <script>
+      (function () {
+        const link = document.getElementById("geolead-ext-install-link");
+        if (!link) return;
+
+        const ua = navigator.userAgent || "";
+        let url = "/extensions";
+
+        const chromeUrl =
+          "https://chromewebstore.google.com/detail/geolead-%E2%87%84-geoguessr-bridg/ibplmeklhbagilmglbaoipeifnpmnbhe";
+        const edgeUrl =
+          "https://microsoftedge.microsoft.com/addons/detail/geolead-%E2%87%84-geoguessr-bridg/gidgabkenpfkmpiaohlfjgjjjneginnl";
+        const firefoxUrl =
+          "https://addons.mozilla.org/en-US/firefox/addon/geolead-geoguessr-bridge/";
+        const safariUrl = "https://apps.apple.com/app/idREPLACE_WITH_REAL_ID";
+
+        if (/Firefox\/\d+/i.test(ua)) {
+          url = firefoxUrl;
+        } else if (/Edg\/\d+/i.test(ua)) {
+          url = edgeUrl;
+        } else if (/Safari/i.test(ua) && !/Chrome|Chromium|Edg/i.test(ua)) {
+          url = safariUrl;
+        } else {
+          url = chromeUrl;
+        }
+
+        link.href = url;
+      })();
+    </script>
+
+    <!-- 4) Listener for extension → GeoLead import -->
+    <script>
+      (function () {
+        const boardSlug = "{{ board.slug }}";
+        const geoleadPlayerName = "{{ me.name|e if me else '' }}";
+
+        window.addEventListener("geolead:geoguessr-import", async (event) => {
+          const game = event.detail || {};
+
+          if (!game || !Array.isArray(game.rounds) || game.rounds.length === 0) {
+            alert(
+              "GeoLead Bridge:\n" +
+                "Could not find any rounds in your last GeoGuessr game.\n" +
+                "Finish today’s daily game first (and press “Finish game” at the end), then try again."
+            );
+            return;
+          }
+
+          const payload = {
+            player_name: geoleadPlayerName || game.player_name || "Unknown",
+            board_slug: boardSlug,
+            total_score: game.total_score ?? null,
+            total_distance_m: game.total_distance_m ?? null,
+            game_id: game.dailyQuizId || game.token || null,
+            played_at: game.played_at || null,
+            rounds: game.rounds.slice(0, 3).map((r) => ({
+              score: r.score ?? 0,
+              distance_m: r.distance_m ?? null,
+              guess_lat:
+                r.guess && typeof r.guess.lat === "number" ? r.guess.lat : null,
+              guess_lng:
+                r.guess && typeof r.guess.lng === "number" ? r.guess.lng : null,
+              target_lat:
+                r.correct && typeof r.correct.lat === "number"
+                  ? r.correct.lat
+                  : null,
+              target_lng:
+                r.correct && typeof r.correct.lng === "number"
+                  ? r.correct.lng
+                  : null,
+            })),
+          };
+
+          try {
+            const resp = await fetch("/api/geoguessr/import", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok) {
+              const msg =
+                (data && (data.detail || data.error)) ||
+                "Import failed for an unknown reason.";
+              alert("GeoLead Bridge:\n" + msg);
+              return;
+            }
+
+            const totalScore = data.total_score ?? payload.total_score ?? "n/a";
+            const totalDistKm = data.total_distance_m
+              ? (data.total_distance_m / 1000).toFixed(1) + " km"
+              : payload.total_distance_m
+              ? (payload.total_distance_m / 1000).toFixed(1) + " km"
+              : "n/a";
+
+            alert(
+              "GeoLead Bridge:\n" +
+                "Imported game successfully!\n" +
+                "Total score: " +
+                totalScore +
+                "\n" +
+                "Total distance: " +
+                totalDistKm
+            );
+
+            window.location.href = "/board/" + boardSlug + "/today";
+          } catch (err) {
+            console.error("GeoLead Bridge import error:", err);
+            alert(
+              "GeoLead Bridge:\n" +
+                "Import failed due to a network or server error.\n" +
+                "Please try again."
+            );
+          }
+        });
+      })();
+    </script>
+
+    <!-- 5) Manual behaviour: clamp scores + paste boxes wired to /api/paste_image
+           + AJAX submit that redirects to Today’s round -->
+    <script>
+      (function () {
+        const r1 = document.getElementById("geolead-score-r1");
+        const r2 = document.getElementById("geolead-score-r2");
+        const r3 = document.getElementById("geolead-score-r3");
+
+        function clampScore(input) {
+          if (!input) return;
+          const v = parseInt(input.value, 10);
+          if (isNaN(v)) return;
+          const nv = Math.min(5000, Math.max(0, v));
+          if (nv !== v) input.value = nv;
+        }
+
+        [r1, r2, r3].forEach((el) => {
+          if (!el) return;
+          el.addEventListener("blur", () => clampScore(el));
+        });
+
+        // Screenshot paste boxes (one active at a time)
+        let activeRound = null;
+
+        function attachPasteBox(round) {
+          const box = document.getElementById("geolead-paste-box-" + round);
+          if (!box) return;
+
+          box.addEventListener("click", () => {
+            activeRound = round;
+            box.focus();
+          });
+
+          box.addEventListener("focus", () => {
+            activeRound = round;
+          });
+        }
+
+        ["r1", "r2", "r3"].forEach(attachPasteBox);
+
+        document.addEventListener("click", (e) => {
+          if (!e.target.closest(".paste-box")) {
+            activeRound = null;
+          }
+        });
+
+        document.addEventListener("paste", async (event) => {
+          if (!activeRound) return;
+
+          const clipboardData = event.clipboardData || window.clipboardData;
+          if (!clipboardData || !clipboardData.items) return;
+
+          let file = null;
+          for (let i = 0; i < clipboardData.items.length; i++) {
+            const item = clipboardData.items[i];
+            if (item.type && item.type.indexOf("image/") === 0) {
+              file = item.getAsFile();
+              break;
+            }
+          }
+
+          if (!file) return;
+          event.preventDefault();
+
+          const box = document.getElementById("geolead-paste-box-" + activeRound);
+          const hiddenInput = document.getElementById("geolead-shot-" + activeRound);
+          const img = document.getElementById("geolead-shot-img-" + activeRound);
+
+          if (!box || !hiddenInput || !img) return;
+
+          const hint = box.querySelector(".hint");
+          const oldHintHtml = hint ? hint.innerHTML : "";
+
+          const fd = new FormData();
+          fd.append("image", file);
+
+          if (hint) hint.innerHTML = "Uploading screenshot…";
+
+          try {
+            const resp = await fetch("/api/paste_image", {
+              method: "POST",
+              body: fd,
+            });
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok || !data || !data.url) {
+              alert(
+                "Screenshot upload failed. Please try again or submit without an image."
+              );
+            } else {
+              hiddenInput.value = data.url;
+              img.src = data.url;
+              img.style.display = "block";
+              box.classList.add("has-image");
+            }
+          } catch (err) {
+            console.error("Screenshot upload failed:", err);
+            alert(
+              "Screenshot upload failed due to a network error. You can still submit without an image."
+            );
+          } finally {
+            if (hint) hint.innerHTML = oldHintHtml;
+          }
+        });
+
+        // NEW: manual form submit → POST via fetch then redirect to Today’s round
+        const form = document.getElementById("geolead-manual-form");
+        if (form) {
+          form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const formData = new FormData(form);
+
+            try {
+              const resp = await fetch(form.action, {
+                method: "POST",
+                body: formData
+              });
+
+              if (!resp.ok) {
+                alert("Could not submit scores. Please try again.");
+                return;
+              }
+
+              window.location.href = "/board/{{ board.slug }}/today";
+            } catch (err) {
+              console.error("Manual submit failed:", err);
+              alert(
+                "Could not submit scores due to a network error. Please try again."
+              );
+            }
+          });
+        }
+      })();
+    </script>
   {% endif %}
 {% endblock %}

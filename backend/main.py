@@ -804,7 +804,10 @@ async def submit_post_for_board(
         db.add(copy)
         db.commit()
         request.session["current_board_slug"] = slug
-        return RedirectResponse(url=f"/board/{slug}?saved=1&reused=1", status_code=303)
+        # ⬇️ redirect straight to Today’s round
+        return RedirectResponse(
+            url=f"/board/{slug}/today?saved=1&reused=1", status_code=303
+        )
 
     # first submission of the day -> accept the form values
     try:
@@ -833,7 +836,11 @@ async def submit_post_for_board(
     db.add(entry)
     db.commit()
     request.session["current_board_slug"] = slug
-    return RedirectResponse(url=f"/board/{slug}?saved=1", status_code=303)
+
+    # redirect straight to Today’s round
+    return RedirectResponse(
+        url=f"/board/{slug}/today?saved=1", status_code=303
+    )
 
 
 # ---------- Auth ---------------------------------------------------------------

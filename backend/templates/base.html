@@ -24,10 +24,10 @@
 
         <!-- center: board title -->
         <div class="nav-center">
-          {% if is_global %}
-            <div class="board-title">Global</div>
-          {% elif board %}
-            <div class="board-title">{{ board.name }}</div>
+          {% if board %}
+            <a href="/board/{{ board.slug }}" class="board-title">
+              {{ board.name }}
+            </a>
           {% endif %}
         </div>
 
