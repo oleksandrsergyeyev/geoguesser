@@ -1,13 +1,21 @@
-
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GeoGuesser Leaderboard</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  {% set theme = current_theme() %}
+  <link
+    rel="stylesheet"
+    href="/static/{% if theme == 'christmas' %}style_christmas.css{% else %}style.css{% endif %}"
+  />
 </head>
 <body>
+  {% if theme == 'christmas' %}
+    <div class="snow-layer snow-1" aria-hidden="true"></div>
+    <div class="snow-layer snow-2" aria-hidden="true"></div>
+    <div class="snow-layer snow-3" aria-hidden="true"></div>
+  {% endif %}
     <header class="topbar">
       <div class="topbar-inner">
         <!-- left -->
@@ -28,12 +36,15 @@
         <!-- right -->
         <nav class="nav-right">
           {% if board and not is_global %}
-            <a class="btn small ghost" href="/board/{{ board.slug }}/today">Today’s round</a>
+            <a class="btn small ghost" href="/board/{{ board.slug }}/today">Today's round</a>
             <a class="btn small" href="/board/{{ board.slug }}/submit">Submit</a>
           {% endif %}
           <a href="/me" class="nav-link">
-            My stats{% if me %} · {{ me.name }}{% endif %}
+            My stats{% if me %} - {{ me.name }}{% endif %}
           </a>
+          {% if me and is_admin(me) %}
+            <a href="/admin/theme" class="nav-link">Admin</a>
+          {% endif %}
           {% if me %}
             <a class="btn small ghost" href="/logout">Logout</a>
           {% else %}
@@ -42,6 +53,13 @@
         </nav>
       </div>
     </header>
+
+  {% if theme == 'christmas' %}
+    <div class="holiday-banner" aria-label="Holiday greeting">
+      <span class="emoji">*</span>
+      <span>Happy Holidays from GeoLeader! Wishing you warm guesses and cozy streaks.</span>
+    </div>
+  {% endif %}
 
 
   <main class="container">
@@ -61,7 +79,7 @@
     window._toastTimer = setTimeout(() => t.classList.remove('show'), timeout);
   };
 
-  // Screenshot lightbox for .shot images (Today’s round)
+  // Screenshot lightbox for .shot images (Today's round)
   (function () {
     function setupLightbox() {
       const shots = document.querySelectorAll('.shot');

@@ -39,7 +39,29 @@ import uuid
 import shutil
 import re
 
+# Load .env (if present) early so ADMIN_EMAILS / DATABASE_URL are honored locally
+def load_local_env() -> None:
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value)
+
+
+load_local_env()
+
 RETAIN_DAYS = int(os.getenv("UPLOAD_RETAIN_DAYS", "1"))  # keep only today by default
+ADMIN_EMAILS: List[str] = [
+    e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()
+]
+THEME_SETTING_KEY = "theme"
+DEFAULT_THEME = "default"
+ALLOWED_THEMES = {"default", "christmas"}
+CURRENT_THEME = DEFAULT_THEME
 
 # ---------- Paths & DB ---------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
@@ -139,6 +161,13 @@ class ImageBlob(Base):
     data: Mapped[bytes] = mapped_column(LargeBinary)
 
 
+class Setting(Base):
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
@@ -222,6 +251,24 @@ cleanup_old_uploads()
 cleanup_old_images()
 
 
+def load_theme_from_db() -> str:
+    """
+    Load the persisted theme or create a default record.
+    """
+    with SessionLocal() as db:
+        setting = db.get(Setting, THEME_SETTING_KEY)
+        if setting and setting.value in ALLOWED_THEMES:
+            return setting.value
+
+        if not setting:
+            db.add(Setting(key=THEME_SETTING_KEY, value=DEFAULT_THEME))
+            db.commit()
+        return DEFAULT_THEME
+
+
+CURRENT_THEME = load_theme_from_db()
+
+
 # Ensure a Global board exists (stats-only)
 def ensure_global_board() -> None:
     with SessionLocal() as db:
@@ -289,6 +336,34 @@ def current_user(request: Request, db: Session) -> Optional[Player]:
         db.execute(select(Player).where(func.lower(Player.email) == email.lower()))
         .scalar_one_or_none()
     )
+
+
+def is_admin_user(user: Optional[Player]) -> bool:
+    if not user or not user.email:
+        return False
+    if not ADMIN_EMAILS:
+        return False
+    return user.email.lower() in ADMIN_EMAILS
+
+
+def set_theme(db: Session, theme: str) -> None:
+    """
+    Persist and cache the selected theme.
+    """
+    global CURRENT_THEME
+    if theme not in ALLOWED_THEMES:
+        raise ValueError("Unsupported theme")
+    row = db.get(Setting, THEME_SETTING_KEY)
+    if row:
+        row.value = theme
+    else:
+        db.add(Setting(key=THEME_SETTING_KEY, value=theme))
+    db.commit()
+    CURRENT_THEME = theme
+
+
+templates.env.globals["is_admin"] = is_admin_user
+templates.env.globals["current_theme"] = lambda: CURRENT_THEME
 
 
 def get_all_boards(db: Session) -> list[dict]:
@@ -775,6 +850,67 @@ async def login_post(
     request.session["user_name"] = player.name
     next_url = request.query_params.get("next") or "/board/global"
     return RedirectResponse(url=next_url, status_code=303)
+
+
+@app.get("/admin/theme", response_class=HTMLResponse)
+async def admin_theme(request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Ftheme", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    themes = [("default", "Default"), ("christmas", "Christmas")]
+    return templates.TemplateResponse(
+        "admin_theme.html",
+        {
+            "request": request,
+            "me": me,
+            "themes": themes,
+            "current_theme_name": CURRENT_THEME,
+            "flash": None,
+            "error": None,
+        },
+    )
+
+
+@app.post("/admin/theme", response_class=HTMLResponse)
+async def admin_theme_post(request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Ftheme", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    form = await request.form()
+    theme = (form.get("theme") or "").strip().lower()
+    themes = [("default", "Default"), ("christmas", "Christmas")]
+
+    if theme not in ALLOWED_THEMES:
+        return templates.TemplateResponse(
+            "admin_theme.html",
+            {
+                "request": request,
+                "me": me,
+                "themes": themes,
+                "current_theme_name": CURRENT_THEME,
+                "flash": None,
+                "error": "Unknown theme.",
+            },
+        )
+
+    set_theme(db, theme)
+    return templates.TemplateResponse(
+        "admin_theme.html",
+        {
+            "request": request,
+            "me": me,
+            "themes": themes,
+            "current_theme_name": CURRENT_THEME,
+            "flash": "Theme updated.",
+            "error": None,
+        },
+    )
 
 
 @app.get("/logout")
