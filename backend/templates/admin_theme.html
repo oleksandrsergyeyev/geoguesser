@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card" style="max-width: 720px; margin: 2rem auto; padding: 1.5rem;">
+  <h1>Theme Settings</h1>
+  <p>Choose the global theme for all users. Current theme: <strong>{{ current_theme_name|title }}</strong></p>
+
+  {% if message %}
+    <div class="alert" style="margin: 1rem 0; padding: 0.75rem 1rem; border-radius: 8px; background: #1f2937; color: #e5e7eb;">
+      {{ message }}
+    </div>
+  {% endif %}
+
+  <form method="POST" action="/admin/theme">
+    <div style="display: grid; gap: 1rem;">
+      {% for theme_name in available_themes %}
+        <label style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border: 1px solid #374151; border-radius: 8px; background: #111827;">
+          <input type="radio" name="theme" value="{{ theme_name }}" {% if theme_name == current_theme_name %}checked{% endif %} />
+          <div>
+            <div style="font-weight: 700; color: #f9fafb;">{{ theme_name | title }}</div>
+            <div style="font-size: 0.9rem; color: #d1d5db;">
+              {% if theme_name == 'default' %}Clean light theme.{% elif theme_name == 'christmas' %}Festive holiday theme.{% else %}Custom theme.{% endif %}
+            </div>
+          </div>
+        </label>
+      {% endfor %}
+    </div>
+
+    <div style="margin-top: 1.25rem; display: flex; gap: 0.75rem;">
+      <button type="submit" class="btn">Apply</button>
+      <a href="/board/global" class="btn ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

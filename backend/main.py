@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional, Literal, List
 
 from fastapi import FastAPI, Depends, Form, HTTPException, Request, UploadFile, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -47,6 +47,20 @@ RETAIN_DAYS = int(os.getenv("UPLOAD_RETAIN_DAYS", "1"))  # keep only today by de
 ROOT = Path(__file__).resolve().parent
 
 STATIC_DIR = ROOT / "static"
+def load_local_env() -> None:
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key, value)
+
+
+load_local_env()
+
 UPLOAD_DIR = STATIC_DIR / "uploads"
 
 DB_URL = os.getenv("DATABASE_URL")
@@ -195,6 +209,12 @@ class ImageBlob(Base):
     )
     mime_type: Mapped[str] = mapped_column(String(100))
     data: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
 
 
 # Create tables if they don't exist
@@ -364,6 +384,56 @@ app.add_middleware(SessionMiddleware, secret_key="change-me-please-very-secret")
 static_dir = ROOT / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
+
+
+# Admin emails from environment
+ADMIN_EMAILS: List[str] = [
+    e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()
+]
+
+THEME_SETTING_KEY = "theme"
+ALLOWED_THEMES = {"default", "christmas"}
+DEFAULT_THEME = "default"
+CURRENT_THEME = DEFAULT_THEME
+
+
+def load_current_theme(db: Session) -> None:
+    global CURRENT_THEME
+    row = db.get(Setting, THEME_SETTING_KEY)
+    if row and row.value in ALLOWED_THEMES:
+        CURRENT_THEME = row.value
+    else:
+        CURRENT_THEME = DEFAULT_THEME
+
+
+def set_theme(db: Session, theme: str) -> None:
+    global CURRENT_THEME
+    if theme not in ALLOWED_THEMES:
+        raise ValueError("Unsupported theme")
+    row = db.get(Setting, THEME_SETTING_KEY)
+    if row:
+        row.value = theme
+    else:
+        db.add(Setting(key=THEME_SETTING_KEY, value=theme))
+    db.commit()
+    CURRENT_THEME = theme
+
+
+def is_admin_user(user: Optional[Player]) -> bool:
+    if not user or not user.email:
+        return False
+    if not ADMIN_EMAILS:
+        return False
+    return user.email.lower() in ADMIN_EMAILS
+
+
+# Register template globals
+templates.env.globals["is_admin"] = is_admin_user
+templates.env.globals["current_theme"] = lambda: CURRENT_THEME
+
+# Load current theme once on startup
+with SessionLocal() as _db:
+    load_current_theme(_db)
 
 
 def get_db() -> Session:
@@ -936,6 +1006,55 @@ async def login_post(
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/board/global", status_code=303)
+
+
+@app.get("/admin/theme", response_class=HTMLResponse)
+async def admin_theme(request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Ftheme", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+    load_current_theme(db)
+    msg = request.query_params.get("msg")
+    return templates.TemplateResponse(
+        "admin_theme.html",
+        {
+            "request": request,
+            "me": me,
+            "available_themes": sorted(ALLOWED_THEMES),
+            "current_theme_name": CURRENT_THEME,
+            "message": msg,
+        },
+    )
+
+
+@app.post("/admin/theme", response_class=HTMLResponse)
+async def admin_theme_post(request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Ftheme", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    form = await request.form()
+    theme = (form.get("theme") or "").strip().lower()
+    if theme not in ALLOWED_THEMES:
+        return RedirectResponse(url="/admin/theme?msg=Invalid+theme", status_code=303)
+
+    set_theme(db, theme)
+    return RedirectResponse(url="/admin/theme?msg=Theme+updated", status_code=303)
+
+
+@app.get("/debug/session")
+async def debug_session(request: Request):
+    # Temporary endpoint to inspect session data
+    return JSONResponse(
+        {
+            "user_email": request.session.get("user_email"),
+            "user_name": request.session.get("user_name"),
+        }
+    )
 
 
 # ---------- API ----------------------------------------------------------------

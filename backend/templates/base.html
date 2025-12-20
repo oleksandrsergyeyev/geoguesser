@@ -5,7 +5,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GeoGuesser Leaderboard</title>
-    <link rel="stylesheet" href="/static/style.css" />
+  {% set theme = current_theme() %}
+  <link
+    rel="stylesheet"
+    href="/static/{% if theme == 'christmas' %}style_christmas.css{% else %}style.css{% endif %}"
+  />
   <!-- Add Leaflet CSS -->
 <link
     rel="stylesheet"
@@ -14,9 +18,11 @@
 
 </head>
 <body>
-  <div class="snow-layer snow-1" aria-hidden="true"></div>
-  <div class="snow-layer snow-2" aria-hidden="true"></div>
-  <div class="snow-layer snow-3" aria-hidden="true"></div>
+  {% if theme == 'christmas' %}
+    <div class="snow-layer snow-1" aria-hidden="true"></div>
+    <div class="snow-layer snow-2" aria-hidden="true"></div>
+    <div class="snow-layer snow-3" aria-hidden="true"></div>
+  {% endif %}
     <header class="topbar">
       <div class="topbar-inner">
         <!-- left -->
@@ -43,6 +49,9 @@
           <a href="/me" class="nav-link">
             My stats{% if me %} · {{ me.name }}{% endif %}
           </a>
+          {% if me and is_admin(me) %}
+            <a href="/admin/theme" class="nav-link">Admin</a>
+          {% endif %}
           {% if me %}
             <a class="btn small ghost" href="/logout">Logout</a>
           {% else %}
@@ -52,10 +61,12 @@
       </div>
     </header>
 
-  <div class="holiday-banner" aria-label="Holiday greeting">
-    <span class="emoji">🎄</span>
-    <span>Happy Holidays from GeoLeader! Wishing you warm guesses and cozy streaks.</span>
-  </div>
+  {% if theme == 'christmas' %}
+    <div class="holiday-banner" aria-label="Holiday greeting">
+      <span class="emoji">🎄</span>
+      <span>Happy Holidays from GeoLeader! Wishing you warm guesses and cozy streaks.</span>
+    </div>
+  {% endif %}
 
 
   <main class="container">
