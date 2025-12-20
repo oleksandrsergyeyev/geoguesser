@@ -2,6 +2,13 @@
 (function () {
   const EXT_LOG_PREFIX = "[GeoLead Bridge CT]";
 
+  // Mark presence so the page can detect the content script.
+  try {
+    window.__geoleadBridgeActive = true;
+  } catch (e) {
+    // ignore
+  }
+
   function log(...args) {
     console.log(EXT_LOG_PREFIX, ...args);
   }

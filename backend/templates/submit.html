@@ -65,6 +65,12 @@
           </button>
         </div>
 
+        <div
+          id="geolead-ext-status"
+          class="muted"
+          style="margin-top:10px; display:none; color:#f87171;"
+        ></div>
+
         <p class="muted" style="margin-top:16px;">
           After import you will be redirected to the <strong>Today’s round</strong> view
           for this board where you can see the map and distances for each round.
@@ -279,6 +285,27 @@
     </p>
 
     <!-- 3) Extension install link auto-detection -->
+    <script>
+      (function () {
+        const statusEl = document.getElementById("geolead-ext-status");
+        if (!statusEl) return;
+
+        function showMissing() {
+          statusEl.textContent =
+            "Extension not detected. Make sure GeoLead Bridge is installed and allowed on this site.";
+          statusEl.style.display = "block";
+        }
+
+        // If the content script ran, it sets this flag.
+        // Otherwise, after a short delay, show a warning so users know to enable/update the extension.
+        setTimeout(() => {
+          if (!window.__geoleadBridgeActive) {
+            showMissing();
+          }
+        }, 1200);
+      })();
+    </script>
+
     <script>
       (function () {
         const link = document.getElementById("geolead-ext-install-link");
