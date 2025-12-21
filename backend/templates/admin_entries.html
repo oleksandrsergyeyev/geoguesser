@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width: 1100px; margin: 2rem auto; padding: 1.25rem;">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <h1 style="margin:0;">Admin · Entries</h1>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <a class="btn ghost" href="/admin/theme">Theme settings</a>
+    </div>
+  </div>
+
+  {% if message %}
+    <div class="flash" style="margin-top:12px;">{{ message }}</div>
+  {% endif %}
+
+  <form method="get" action="/admin/entries" style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label style="display:block; font-weight:600; margin-bottom:4px;">Board slug</label>
+      <input type="text" name="board_slug" value="{{ board_slug }}" style="padding:8px 10px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text); min-width:180px;" placeholder="(all boards)" />
+    </div>
+    <div>
+      <label style="display:block; font-weight:600; margin-bottom:4px;">Limit</label>
+      <input type="number" name="limit" value="{{ limit }}" min="1" max="500" style="padding:8px 10px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text); width:100px;" />
+    </div>
+    <button type="submit" class="btn" style="height:38px;">Apply</button>
+  </form>
+
+  <div style="overflow-x:auto; margin-top:14px;">
+    <table class="table compact" style="min-width:820px;">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Player</th>
+          <th>Board</th>
+          <th>Played at (UTC)</th>
+          <th>R1</th>
+          <th>R2</th>
+          <th>R3</th>
+          <th>Total</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not entries %}
+          <tr><td colspan="9" class="muted">No entries</td></tr>
+        {% else %}
+          {% for row in entries %}
+            {% set entry = row.entry %}
+            {% set player = row.player %}
+            {% set board = row.board %}
+            <tr>
+              <td class="num">{{ entry.id }}</td>
+              <td>
+                <div style="font-weight:600;">{{ player.name }}</div>
+                <div style="color:var(--muted); font-size:12px;">{{ player.email }}</div>
+              </td>
+              <td>{{ board.slug }}</td>
+              <td>{{ entry.played_at.strftime('%Y-%m-%d %H:%M') }}</td>
+              <td class="num">{{ entry.round1 }}</td>
+              <td class="num">{{ entry.round2 }}</td>
+              <td class="num">{{ entry.round3 }}</td>
+              <td class="num">{{ entry.total_score }}</td>
+              <td style="white-space:nowrap; display:flex; gap:6px;">
+                <a class="btn small" href="/admin/entries/{{ entry.id }}/edit">Edit</a>
+                <form method="post" action="/admin/entries/{{ entry.id }}/delete" onsubmit="return confirm('Delete entry #{{ entry.id }}?');">
+                  <button type="submit" class="btn small ghost">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

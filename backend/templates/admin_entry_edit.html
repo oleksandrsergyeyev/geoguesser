@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width: 640px; margin: 2rem auto; padding: 1.25rem;">
+  <h1 style="margin-top:0;">Edit entry #{{ entry.id }}</h1>
+  <p style="margin:4px 0 12px; color:var(--muted);">
+    Player: {{ player.name }} ({{ player.email }}) · Board: {{ board.slug if board else 'n/a' }}
+  </p>
+
+  <form method="post" action="/admin/entries/{{ entry.id }}/edit" style="display:grid; gap:12px;">
+    <label style="display:grid; gap:6px;">
+      <span>Round 1</span>
+      <input type="number" name="round1" value="{{ entry.round1 }}" min="0" max="5000" required style="padding:10px 12px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text);" />
+    </label>
+    <label style="display:grid; gap:6px;">
+      <span>Round 2</span>
+      <input type="number" name="round2" value="{{ entry.round2 }}" min="0" max="5000" required style="padding:10px 12px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text);" />
+    </label>
+    <label style="display:grid; gap:6px;">
+      <span>Round 3</span>
+      <input type="number" name="round3" value="{{ entry.round3 }}" min="0" max="5000" required style="padding:10px 12px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text);" />
+    </label>
+    <label style="display:grid; gap:6px;">
+      <span>Played at (UTC)</span>
+      <input type="datetime-local" name="played_at" value="{{ played_at_local }}" step="60" style="padding:10px 12px; border-radius:8px; border:1px solid #2b2e35; background:#0f1116; color:var(--text);" />
+    </label>
+
+    <div style="display:flex; gap:10px; align-items:center;">
+      <button type="submit" class="btn">Save</button>
+      <a class="btn ghost" href="/admin/entries">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

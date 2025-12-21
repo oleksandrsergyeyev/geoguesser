@@ -1046,6 +1046,152 @@ async def admin_theme_post(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url="/admin/theme?msg=Theme+updated", status_code=303)
 
 
+@app.get("/admin/entries", response_class=HTMLResponse)
+async def admin_entries(
+    request: Request,
+    db: Session = Depends(get_db),
+    board_slug: Optional[str] = None,
+    limit: int = 100,
+):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Fentries", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    limit = max(1, min(limit, 500))
+
+    stmt = (
+        select(ScoreEntry, Player, Board)
+        .join(Player, ScoreEntry.player_id == Player.id)
+        .join(Board, ScoreEntry.board_id == Board.id)
+        .order_by(ScoreEntry.played_at.desc())
+        .limit(limit)
+    )
+
+    if board_slug:
+        stmt = stmt.where(Board.slug == board_slug)
+
+    rows = db.execute(stmt).all()
+    entries = [
+        {
+            "entry": row[0],
+            "player": row[1],
+            "board": row[2],
+        }
+        for row in rows
+    ]
+
+    msg = request.query_params.get("msg")
+    return templates.TemplateResponse(
+        "admin_entries.html",
+        {
+            "request": request,
+            "me": me,
+            "entries": entries,
+            "board_slug": board_slug or "",
+            "limit": limit,
+            "message": msg,
+        },
+    )
+
+
+@app.get("/admin/entries/{entry_id}/edit", response_class=HTMLResponse)
+async def admin_entry_edit_form(entry_id: int, request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Fentries", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    entry = db.get(ScoreEntry, entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry not found")
+
+    player = db.get(Player, entry.player_id)
+    board = db.get(Board, entry.board_id) if entry.board_id else None
+
+    played_at_local = entry.played_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+
+    return templates.TemplateResponse(
+        "admin_entry_edit.html",
+        {
+            "request": request,
+            "me": me,
+            "entry": entry,
+            "player": player,
+            "board": board,
+            "played_at_local": played_at_local,
+        },
+    )
+
+
+@app.post("/admin/entries/{entry_id}/edit")
+async def admin_entry_edit(entry_id: int, request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Fentries", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    entry = db.get(ScoreEntry, entry_id)
+    if not entry:
+        raise HTTPException(404, "Entry not found")
+
+    form = await request.form()
+    try:
+        r1 = int(form.get("round1"))
+        r2 = int(form.get("round2"))
+        r3 = int(form.get("round3"))
+    except Exception:
+        raise HTTPException(400, "Scores must be integers")
+
+    if any(x < 0 or x > 5000 for x in (r1, r2, r3)):
+        raise HTTPException(400, "Scores must be between 0 and 5000")
+
+    played_at_str = (form.get("played_at") or "").strip()
+    played_at_val = entry.played_at
+    if played_at_str:
+        try:
+            dt = datetime.fromisoformat(played_at_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            played_at_val = dt.astimezone(timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Invalid played_at datetime")
+
+    entry.round1 = r1
+    entry.round2 = r2
+    entry.round3 = r3
+    entry.total_score = r1 + r2 + r3
+    entry.played_at = played_at_val
+    db.add(entry)
+    db.commit()
+
+    return RedirectResponse(
+        url="/admin/entries?msg=Entry+updated",
+        status_code=303,
+    )
+
+
+@app.post("/admin/entries/{entry_id}/delete")
+async def admin_entry_delete(entry_id: int, request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    if not me:
+        return RedirectResponse(url="/login?next=%2Fadmin%2Fentries", status_code=303)
+    if not is_admin_user(me):
+        raise HTTPException(403, "Admins only")
+
+    entry = db.get(ScoreEntry, entry_id)
+    if not entry:
+        return RedirectResponse(url="/admin/entries?msg=Not+found", status_code=303)
+
+    db.delete(entry)
+    db.commit()
+
+    return RedirectResponse(url="/admin/entries?msg=Entry+deleted", status_code=303)
+
+
 @app.get("/debug/session")
 async def debug_session(request: Request):
     # Temporary endpoint to inspect session data
