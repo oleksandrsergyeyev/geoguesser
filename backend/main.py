@@ -42,6 +42,8 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import uuid
 import shutil
 import re
+import reverse_geocoder
+import pycountry
 
 RETAIN_DAYS = int(os.getenv("UPLOAD_RETAIN_DAYS", "1"))  # keep only today by default
 
@@ -193,6 +195,7 @@ class GeoRound(Base):
     guess_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     target_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     target_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    target_country: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     distance_m: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
@@ -342,6 +345,40 @@ def ensure_geoguessr_columns():
                 conn.exec_driver_sql(sql)
 
 
+def ensure_georound_country_column():
+    insp = inspect(engine)
+    cols = {c["name"] for c in insp.get_columns("georounds")}
+    if "target_country" not in cols:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("ALTER TABLE georounds ADD COLUMN target_country VARCHAR(80)")
+
+
+def backfill_missing_countries():
+    """Populate target_country for existing GeoRound rows that have coordinates."""
+    with SessionLocal() as db:
+        while True:
+            rows = db.execute(
+                select(GeoRound.id, GeoRound.target_lat, GeoRound.target_lng)
+                .where(
+                    GeoRound.target_country.is_(None),
+                    GeoRound.target_lat.is_not(None),
+                    GeoRound.target_lng.is_not(None),
+                )
+                .limit(500)
+            ).all()
+
+            if not rows:
+                break
+
+            for row in rows:
+                country_name = country_from_coords(row.target_lat, row.target_lng)
+                if country_name:
+                    gr = db.get(GeoRound, row.id)
+                    if gr:
+                        gr.target_country = country_name
+            db.commit()
+
+
 def cleanup_old_images():
     """
     Delete images older than RETAIN_DAYS from the DB.
@@ -358,6 +395,7 @@ def cleanup_old_images():
 
 ensure_se_column()
 ensure_geoguessr_columns()
+ensure_georound_country_column()
 cleanup_old_uploads()
 cleanup_old_images()
 
@@ -545,6 +583,7 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
 
     rows = db.execute(
         select(
+            ScoreEntry.id,
             ScoreEntry.played_at,
             ScoreEntry.round1,
             ScoreEntry.round2,
@@ -558,11 +597,31 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
         .order_by(ScoreEntry.played_at.desc())
     ).all()
 
+    entry_ids = [r.id for r in rows]
+
+    countries_by_entry: dict[int, list[str]] = {}
+    if entry_ids:
+        geo_rows = db.execute(
+            select(GeoGame.score_entry_id, GeoRound.target_country)
+            .join(GeoRound, GeoRound.game_id == GeoGame.id)
+            .where(GeoGame.score_entry_id.in_(entry_ids))
+        ).all()
+        for gr in geo_rows:
+            if gr.target_country:
+                countries_by_entry.setdefault(gr.score_entry_id, []).append(
+                    gr.target_country
+                )
+
     out: list[dict] = []
     for r in rows:
         dt: datetime = r.played_at
+        country_list = countries_by_entry.get(r.id, [])
+        # keep unique order
+        seen = set()
+        countries = [c for c in country_list if not (c in seen or seen.add(c))]
         out.append(
             {
+                "entry_id": r.id,
                 "played_at": dt,
                 "day": dt.date().isoformat(),
                 "time": dt.strftime("%H:%M"),
@@ -572,6 +631,8 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
                 "total": int(r.total_score or 0),
                 "board_name": r.board_name or "—",
                 "board_slug": r.board_slug or "",
+                "countries": countries,
+                "countries_str": ", ".join(countries) if countries else "—",
             }
         )
     return out
@@ -617,6 +678,118 @@ def group_entries_by_year_week(entries: list[dict]) -> list[dict]:
 
     year_blocks.sort(key=lambda d: d["year"], reverse=True)
     return year_blocks
+
+
+# Country lookup (lat/lng -> country name)
+_country_cache: dict[tuple[int, int], str | None] = {}
+
+# Minimum rounds required for a player to be included in rankings per country
+# (players below the threshold are shown but marked as not ranked).
+COUNTRY_RANK_MIN_ROUNDS = int(os.getenv("COUNTRY_RANK_MIN_ROUNDS", "3"))
+
+
+def country_from_coords(lat: Optional[float], lng: Optional[float]) -> Optional[str]:
+    if lat is None or lng is None:
+        return None
+    # cache on rounded coords to reduce lookups
+    key = (round(lat, 3), round(lng, 3))
+    if key in _country_cache:
+        return _country_cache[key]
+
+    try:
+        res = reverse_geocoder.search((lat, lng), mode=1)
+        cc = (res[0].get("cc") or "").upper()
+        if not cc:
+            _country_cache[key] = None
+            return None
+        country = pycountry.countries.get(alpha_2=cc)
+        name = country.name if country else cc
+    except Exception:
+        name = None
+
+    _country_cache[key] = name
+    return name
+
+
+def query_country_specialists(db: Session) -> list[dict]:
+    """Accuracy per country for all players (ranked list plus unranked below threshold)."""
+    rows = db.execute(
+        select(
+            GeoRound.target_country.label("country"),
+            Player.id.label("player_id"),
+            Player.name.label("player_name"),
+            func.count().label("rounds"),
+            func.count(func.distinct(ScoreEntry.id)).label("games"),
+            func.avg(GeoRound.distance_m).label("avg_distance"),
+            func.min(GeoRound.distance_m).label("best_distance"),
+            func.max(ScoreEntry.played_at).label("last_played"),
+        )
+        .join(GeoGame, GeoGame.id == GeoRound.game_id)
+        .join(ScoreEntry, ScoreEntry.id == GeoGame.score_entry_id)
+        .join(Player, Player.id == ScoreEntry.player_id)
+        .where(GeoRound.target_country.is_not(None), GeoRound.distance_m.is_not(None))
+        .group_by("country", "player_id", "player_name")
+    ).all()
+
+    by_country: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        rounds = int(r.rounds or 0)
+        is_ranked = rounds >= COUNTRY_RANK_MIN_ROUNDS
+        by_country[r.country].append(
+            {
+                "country": r.country,
+                "player_id": r.player_id,
+                "player_name": r.player_name,
+                "rounds": rounds,
+                "games": int(r.games or 0),
+                "avg_distance": float(r.avg_distance) if r.avg_distance is not None else None,
+                "best_distance": float(r.best_distance) if r.best_distance is not None else None,
+                "last_played": r.last_played,
+                "is_ranked": is_ranked,
+            }
+        )
+
+    ranked: list[dict] = []
+    for country, items in by_country.items():
+        ranked_items = [i for i in items if i["is_ranked"]]
+        unranked_items = [i for i in items if not i["is_ranked"]]
+
+        ranked_items.sort(
+            key=lambda x: (
+                x["avg_distance"] if x["avg_distance"] is not None else float("inf"),
+                x["best_distance"] if x["best_distance"] is not None else float("inf"),
+                -x["rounds"],
+                x["last_played"] or datetime.min,
+            )
+        )
+        unranked_items.sort(
+            key=lambda x: (
+                -x["rounds"],
+                x["last_played"] or datetime.min,
+            )
+        )
+
+        for idx, item in enumerate(ranked_items, start=1):
+            ranked.append({"rank": idx, **item})
+        for item in unranked_items:
+            ranked.append({"rank": None, **item})
+
+    ranked.sort(
+        key=lambda x: (
+            x["country"],
+            x["rank"] is None,  # push unranked after ranked
+            x["rank"] or 0,
+            x["avg_distance"] if x["avg_distance"] is not None else float("inf"),
+            x["best_distance"] if x["best_distance"] is not None else float("inf"),
+            -x["rounds"],
+            x["last_played"] or datetime.min,
+        )
+    )
+    return ranked
+
+
+# Run backfill after helpers are defined
+backfill_missing_countries()
 
 
 def query_leaderboard(
@@ -1567,6 +1740,7 @@ async def api_geoguessr_import(
     game.rounds.clear()
 
     for idx, r in enumerate(payload.rounds, start=1):
+        country_name = country_from_coords(r.target_lat, r.target_lng)
         gr = GeoRound(
             game_id=game.id,
             round_index=idx,
@@ -1574,6 +1748,7 @@ async def api_geoguessr_import(
             guess_lng=r.guess_lng,
             target_lat=r.target_lat,
             target_lng=r.target_lng,
+            target_country=country_name,
             distance_m=r.distance_m,
             score=int(r.score or 0),
         )
@@ -1627,6 +1802,21 @@ async def player_stats(player_id: int, request: Request, db: Session = Depends(g
             "player": player,
             "entries": entries,
             "entries_by_year": group_entries_by_year_week(entries),
+        },
+    )
+
+
+@app.get("/country-accuracy", response_class=HTMLResponse)
+async def country_accuracy(request: Request, db: Session = Depends(get_db)):
+    me = current_user(request, db)
+    specialists = query_country_specialists(db)
+    return templates.TemplateResponse(
+        "country_accuracy.html",
+        {
+            "request": request,
+            "me": me,
+            "specialists": specialists,
+            "min_rounds_for_rank": COUNTRY_RANK_MIN_ROUNDS,
         },
     )
 

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Country accuracy{% endblock %}
+{% block content %}
+
+<section class="card">
+  <div class="card-header">
+    <div>
+      <h1>Country accuracy</h1>
+      <p class="muted" style="margin:4px 0 0;">Players with fewer than {{ min_rounds_for_rank }} rounds are shown but not ranked.</p>
+    </div>
+  </div>
+
+  {% if specialists|length == 0 %}
+    <p class="muted">No data yet.</p>
+  {% else %}
+    {% for group in specialists|groupby('country') %}
+      {% set country = group.grouper %}
+      <div class="country-block" style="margin-top:12px;">
+        <div class="country-block__header">
+          <h2 style="margin:0;">{{ country }}</h2>
+        </div>
+        <table class="table compact" style="margin:0;">
+          <thead>
+            <tr>
+              <th class="num">#</th>
+              <th>Player</th>
+              <th class="num">Avg distance</th>
+              <th class="num">Best distance</th>
+              <th class="num">Rounds</th>
+              <th>Last played</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in group.list %}
+              <tr>
+                <td class="num">
+                  {% if row.rank %}{{ row.rank }}{% else %}—{% endif %}
+                </td>
+                <td>
+                  <a href="/player/{{ row.player_id }}">{{ row.player_name }}</a>
+                  {% if not row.is_ranked %}
+                    <span class="muted" style="margin-left:6px; font-size:0.9em;">Not ranked</span>
+                  {% endif %}
+                </td>
+                <td class="num">{% if row.avg_distance is not none %}{{ '{:,.0f}'.format(row.avg_distance) }} m{% else %}—{% endif %}</td>
+                <td class="num">{% if row.best_distance is not none %}{{ '{:,.0f}'.format(row.best_distance) }} m{% else %}—{% endif %}</td>
+                <td class="num">{{ row.rounds }}</td>
+                <td>{{ row.last_played.date() if row.last_played else '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  {% endif %}
+</section>
+
+{% endblock %}

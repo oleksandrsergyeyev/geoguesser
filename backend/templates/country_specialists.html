@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Country specialists{% endblock %}
+{% block content %}
+
+<section class="card">
+  <div class="card-header">
+    <div>
+      <p class="eyebrow">Country specialists</p>
+      <h1>Country specialists</h1>
+      <p class="muted">Top player per country based on best total score in games touching that country.</p>
+    </div>
+  </div>
+
+  <table class="table compact">
+    <thead>
+      <tr>
+        <th>Country</th>
+        <th>Specialist</th>
+        <th class="num">Best score</th>
+        <th class="num">Avg distance</th>
+        <th class="num">Entries</th>
+        <th>Last played</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if specialists|length == 0 %}
+        <tr><td colspan="6" class="muted">No data yet.</td></tr>
+      {% else %}
+        {% for row in specialists %}
+          <tr>
+            <td>{{ row.country }}</td>
+            <td><a href="/player/{{ row.player_id }}">{{ row.player_name }}</a></td>
+            <td class="num">{{ '{:,}'.format(row.best_score) }}</td>
+            <td class="num">{% if row.avg_distance is not none %}{{ '{:,.0f}'.format(row.avg_distance) }} m{% else %}—{% endif %}</td>
+            <td class="num">{{ row.rounds }}</td>
+            <td>{{ row.last_played.date() if row.last_played else '—' }}</td>
+          </tr>
+        {% endfor %}
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+
+{% endblock %}

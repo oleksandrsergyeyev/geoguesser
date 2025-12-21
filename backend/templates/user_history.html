@@ -32,6 +32,7 @@
                 <th>Date</th>
                 <th>Time</th>
                 <th>Board</th>
+                <th>Countries</th>
                 <th class="num">R1</th>
                 <th class="num">R2</th>
                 <th class="num">R3</th>
@@ -50,6 +51,7 @@
                       {{ e.board_name }}
                     {% endif %}
                   </td>
+                  <td class="muted">{{ e.countries_str }}</td>
                   <td class="num">{{ e.round1 }}</td>
                   <td class="num">{{ e.round2 }}</td>
                   <td class="num">{{ e.round3 }}</td>
