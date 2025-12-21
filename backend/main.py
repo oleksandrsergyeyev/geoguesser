@@ -577,6 +577,48 @@ def fetch_player_entries(db: Session, player_id: int) -> list[dict]:
     return out
 
 
+def group_entries_by_year_week(entries: list[dict]) -> list[dict]:
+    """Group player entries by ISO year and week for display."""
+    buckets: dict[int, dict[int, dict]] = defaultdict(dict)
+
+    for entry in entries:
+        dt: datetime = entry["played_at"]
+        year, week, _ = dt.isocalendar()
+        week_bucket = buckets[year].setdefault(
+            week,
+            {
+                "year": year,
+                "week": week,
+                "entries": [],
+            },
+        )
+        week_bucket["entries"].append(entry)
+
+    year_blocks: list[dict] = []
+    for year, weeks in buckets.items():
+        week_list: list[dict] = []
+        for week, data in weeks.items():
+            data["entries"].sort(key=lambda e: e["played_at"], reverse=True)
+            start_dt = datetime.fromisocalendar(year, week, 1)
+            end_dt = datetime.fromisocalendar(year, week, 7)
+            data.update(
+                {
+                    "week_label": f"{year}-W{week:02d}",
+                    "week_start": start_dt.date().isoformat(),
+                    "week_end": end_dt.date().isoformat(),
+                    "entry_count": len(data["entries"]),
+                    "week_total": sum(e["total"] for e in data["entries"]),
+                }
+            )
+            week_list.append(data)
+
+        week_list.sort(key=lambda d: d["week"], reverse=True)
+        year_blocks.append({"year": year, "weeks": week_list})
+
+    year_blocks.sort(key=lambda d: d["year"], reverse=True)
+    return year_blocks
+
+
 def query_leaderboard(
     db: Session, board_id: Optional[int], period: Literal["all", "today", "week"]
 ) -> list[dict]:
@@ -1560,7 +1602,13 @@ async def my_stats(request: Request, db: Session = Depends(get_db)):
     entries = fetch_player_entries(db, me.id)
     return templates.TemplateResponse(
         "user_history.html",
-        {"request": request, "me": me, "player": me, "entries": entries},
+        {
+            "request": request,
+            "me": me,
+            "player": me,
+            "entries": entries,
+            "entries_by_year": group_entries_by_year_week(entries),
+        },
     )
 
 
@@ -1573,7 +1621,13 @@ async def player_stats(player_id: int, request: Request, db: Session = Depends(g
     me = current_user(request, db)
     return templates.TemplateResponse(
         "user_history.html",
-        {"request": request, "me": me, "player": player, "entries": entries},
+        {
+            "request": request,
+            "me": me,
+            "player": player,
+            "entries": entries,
+            "entries_by_year": group_entries_by_year_week(entries),
+        },
     )
 
 

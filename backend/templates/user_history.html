@@ -2,46 +2,66 @@
 {% block title %}Stats · {{ player.name }}{% endblock %}
 {% block content %}
 
-<h1>Stats · {{ player.name }}</h1>
+<h1>History · {{ player.name }}</h1>
 
-<div class="card" style="margin-top:12px;">
-  <h2>History</h2>
-  <table class="table compact">
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Time</th>
-        <th>Board</th>
-        <th class="num">R1</th>
-        <th class="num">R2</th>
-        <th class="num">R3</th>
-        <th class="num">Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% if entries|length == 0 %}
-        <tr><td colspan="7" class="muted">No submissions yet.</td></tr>
-      {% else %}
-        {% for e in entries %}
-          <tr>
-            <td>{{ e.day }}</td>
-            <td>{{ e.time }}</td>
-            <td>
-              {% if e.board_slug %}
-                <a href="/board/{{ e.board_slug }}">{{ e.board_name }}</a>
-              {% else %}
-                {{ e.board_name }}
-              {% endif %}
-            </td>
-            <td class="num">{{ e.round1 }}</td>
-            <td class="num">{{ e.round2 }}</td>
-            <td class="num">{{ e.round3 }}</td>
-            <td class="num">{{ '{:,}'.format(e.total) }}</td>
-          </tr>
-        {% endfor %}
-      {% endif %}
-    </tbody>
-  </table>
-</div>
+{% if entries_by_year|length == 0 %}
+  <div class="card" style="margin-top:12px;">
+    <p class="muted">No submissions yet.</p>
+  </div>
+{% else %}
+  {% for year in entries_by_year %}
+    <div class="card" style="margin-top:12px;">
+      <div class="card-header" style="margin-bottom:0;">
+        <div>
+          <p class="eyebrow">{{ year.year }}</p>
+          <h2>{{ year.year }} history</h2>
+        </div>
+      </div>
+
+      {% for week in year.weeks %}
+        <div class="personal-week">
+          <div class="week-meta">
+            <div class="week-title">{{ week.week_label }}</div>
+            <div class="week-range">{{ week.week_start }} – {{ week.week_end }}</div>
+            <div class="week-count">{{ week.entry_count }} entries</div>
+            <div class="week-total">{{ '{:,}'.format(week.week_total) }} total</div>
+          </div>
+          <table class="table compact history-list" style="margin:0;">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Board</th>
+                <th class="num">R1</th>
+                <th class="num">R2</th>
+                <th class="num">R3</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in week.entries %}
+                <tr>
+                  <td>{{ e.day }}</td>
+                  <td class="muted">{{ e.time }}</td>
+                  <td>
+                    {% if e.board_slug %}
+                      <a href="/board/{{ e.board_slug }}">{{ e.board_name }}</a>
+                    {% else %}
+                      {{ e.board_name }}
+                    {% endif %}
+                  </td>
+                  <td class="num">{{ e.round1 }}</td>
+                  <td class="num">{{ e.round2 }}</td>
+                  <td class="num">{{ e.round3 }}</td>
+                  <td class="num">{{ '{:,}'.format(e.total) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+{% endif %}
 
 {% endblock %}
