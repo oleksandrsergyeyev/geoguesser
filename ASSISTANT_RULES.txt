@@ -3,3 +3,6 @@ Rules to check before any task:
 1) Do NOT push to any remote unless the user explicitly says so for that specific push.
 2) Confirm actions when unsure; ask before proceeding if instructions are ambiguous.
 3) Avoid changing .env or secrets unless explicitly requested.
+4) When starting the app yourself, launch from the repo root using the shared DB:
+	.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+	(This keeps the single SQLite at C:/Users/explo/Documents/projects/geoguesser/geoguessr.db.)

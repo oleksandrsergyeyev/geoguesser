@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Literal, List
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Depends, Form, HTTPException, Request, UploadFile, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, JSONResponse
@@ -1015,18 +1016,12 @@ async def admin_theme(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login?next=%2Fadmin%2Ftheme", status_code=303)
     if not is_admin_user(me):
         raise HTTPException(403, "Admins only")
-    load_current_theme(db)
+    # Keep legacy route but forward to consolidated admin console.
     msg = request.query_params.get("msg")
-    return templates.TemplateResponse(
-        "admin_theme.html",
-        {
-            "request": request,
-            "me": me,
-            "available_themes": sorted(ALLOWED_THEMES),
-            "current_theme_name": CURRENT_THEME,
-            "message": msg,
-        },
-    )
+    target = "/admin/entries"
+    if msg:
+        target = f"{target}?msg={quote_plus(msg)}"
+    return RedirectResponse(url=target, status_code=303)
 
 
 @app.post("/admin/theme", response_class=HTMLResponse)
@@ -1039,11 +1034,14 @@ async def admin_theme_post(request: Request, db: Session = Depends(get_db)):
 
     form = await request.form()
     theme = (form.get("theme") or "").strip().lower()
+    next_url = (form.get("next") or request.query_params.get("next") or "").strip()
     if theme not in ALLOWED_THEMES:
-        return RedirectResponse(url="/admin/theme?msg=Invalid+theme", status_code=303)
+        target = next_url or "/admin/theme"
+        return RedirectResponse(url=f"{target}?msg=Invalid+theme", status_code=303)
 
     set_theme(db, theme)
-    return RedirectResponse(url="/admin/theme?msg=Theme+updated", status_code=303)
+    target = next_url or "/admin/theme"
+    return RedirectResponse(url=f"{target}?msg=Theme+updated", status_code=303)
 
 
 @app.get("/admin/entries", response_class=HTMLResponse)
@@ -1061,6 +1059,13 @@ async def admin_entries(
         return RedirectResponse(url="/login?next=%2Fadmin%2Fentries", status_code=303)
     if not is_admin_user(me):
         raise HTTPException(403, "Admins only")
+
+    # Root /admin should land here.
+    if request.url.path.rstrip("/") == "/admin":
+        return RedirectResponse(url="/admin/entries", status_code=303)
+
+    # Load current theme so the combined admin page can render theme settings.
+    load_current_theme(db)
 
     limit = max(1, min(limit, 500))
 
@@ -1122,6 +1127,8 @@ async def admin_entries(
             "limit": limit,
             "boards": boards,
             "players": players,
+            "available_themes": sorted(ALLOWED_THEMES),
+            "current_theme_name": CURRENT_THEME,
             "message": msg,
         },
     )

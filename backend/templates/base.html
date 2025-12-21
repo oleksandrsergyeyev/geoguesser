@@ -50,7 +50,7 @@
             My stats{% if me %} · {{ me.name }}{% endif %}
           </a>
           {% if me and is_admin(me) %}
-            <a href="/admin/theme" class="nav-link">Admin</a>
+            <a href="/admin/entries" class="nav-link">Admin</a>
           {% endif %}
           {% if me %}
             <a class="btn small ghost" href="/logout">Logout</a>
