@@ -713,6 +713,8 @@ def country_from_coords(lat: Optional[float], lng: Optional[float]) -> Optional[
 
 def query_country_specialists(db: Session) -> list[dict]:
     """Accuracy per country for all players (ranked list plus unranked below threshold)."""
+    # Exclude today's rounds from country accuracy stats
+    today_start = start_of_today_utc(utcnow())
     rows = db.execute(
         select(
             GeoRound.target_country.label("country"),
@@ -727,7 +729,11 @@ def query_country_specialists(db: Session) -> list[dict]:
         .join(GeoGame, GeoGame.id == GeoRound.game_id)
         .join(ScoreEntry, ScoreEntry.id == GeoGame.score_entry_id)
         .join(Player, Player.id == ScoreEntry.player_id)
-        .where(GeoRound.target_country.is_not(None), GeoRound.distance_m.is_not(None))
+        .where(
+            GeoRound.target_country.is_not(None),
+            GeoRound.distance_m.is_not(None),
+            ScoreEntry.played_at < today_start
+        )
         .group_by(GeoRound.target_country, Player.id, Player.name)
     ).all()
 
